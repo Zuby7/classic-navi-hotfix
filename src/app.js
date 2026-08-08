@@ -1253,20 +1253,29 @@ function quietDriverStyle(map){
       const major=/(motorway|trunk|primary)/.test(id);
       const minor=/(street|minor|service)/.test(id);
       const widths=major
-        ?(casing?[14,8,16,13,18,22,20,31]:[14,5,16,9,18,16,20,23])
-        :(minor?(casing?[14,5,16,9,18,15,20,22]:[14,3,16,6,18,11,20,16])
-          :(casing?[14,7,16,11,18,18,20,26]:[14,4,16,8,18,13,20,19]));
+        ?(casing?[14,10,16,16,18,27,20,37]:[14,6,16,11,18,19,20,27])
+        :(minor?(casing?[14,6,16,11,18,18,20,27]:[14,4,16,8,18,14,20,20])
+          :(casing?[14,8,16,14,18,22,20,32]:[14,5,16,10,18,16,20,23]));
       try{map.setPaintProperty(layer.id,'line-width',['interpolate',['linear'],['zoom'],...widths]);}catch{}
+      try{map.setPaintProperty(layer.id,'line-color',casing?'#9faab8':'#fbfcf7');}catch{}
+      try{map.setPaintProperty(layer.id,'line-opacity',casing?.96:1);}catch{}
     }
     if(layer.type==='symbol'&&layer['source-layer']==='transportation_name'&&/highway-name-(path|minor|major)/.test(id)){
       // Jede Eigenschaft separat setzen: Ein auf einem Tile-Server fehlender Bold-Font
       // darf nicht mehr verhindern, dass Größe, Abstand und Halo angewendet werden.
-      try{map.setLayoutProperty(layer.id,'text-size',['interpolate',['linear'],['zoom'],13,20,15,25,17,30,19,36]);}catch{}
+      try{map.setLayoutProperty(layer.id,'text-size',['interpolate',['linear'],['zoom'],13,19,15,23,17,27,19,31]);}catch{}
       try{map.setLayoutProperty(layer.id,'symbol-spacing',650);}catch{}
+      // Google-Maps-artig: Der Name folgt dem Winkel der Straße, liegt aber flach
+      // auf der Bildschirmfläche und wird niemals kopfüber oder stark verbogen.
+      try{map.setLayoutProperty(layer.id,'text-pitch-alignment','viewport');}catch{}
+      try{map.setLayoutProperty(layer.id,'text-rotation-alignment','map');}catch{}
+      try{map.setLayoutProperty(layer.id,'text-keep-upright',true);}catch{}
+      try{map.setLayoutProperty(layer.id,'text-max-angle',25);}catch{}
+      try{map.setLayoutProperty(layer.id,'text-letter-spacing',.01);}catch{}
       try{map.setPaintProperty(layer.id,'text-color','#111a1f');}catch{}
       try{map.setPaintProperty(layer.id,'text-halo-color','#fbfcf5');}catch{}
-      try{map.setPaintProperty(layer.id,'text-halo-width',3.2);}catch{}
-      try{map.setPaintProperty(layer.id,'text-halo-blur',.25);}catch{}
+      try{map.setPaintProperty(layer.id,'text-halo-width',2.6);}catch{}
+      try{map.setPaintProperty(layer.id,'text-halo-blur',.15);}catch{}
       try{map.setLayoutProperty(layer.id,'text-font',['Noto Sans Bold']);}catch{}
     }
   }
@@ -1817,8 +1826,9 @@ function enableDriveDemo() {
     const driver=state.driverMap;
     const point=driver?.project?.([state.current.lon,state.current.lat]);
     const roadNameLayer=driver?.getStyle?.()?.layers?.find(layer=>layer.id==='highway-name-minor');
+    const roadLayer=driver?.getStyle?.()?.layers?.find(layer=>layer.id==='road_minor');
     return driver
-      ?{renderer:'maplibre',zoom:driver.getZoom(),bearing:driver.getBearing(),pitch:driver.getPitch(),mapSize:{x:driver.getContainer().clientWidth,y:driver.getContainer().clientHeight},gpsPoint:point&&{x:point.x,y:point.y},roadNameSize:roadNameLayer?.layout?.['text-size']}
+      ?{renderer:'maplibre',zoom:driver.getZoom(),bearing:driver.getBearing(),pitch:driver.getPitch(),mapSize:{x:driver.getContainer().clientWidth,y:driver.getContainer().clientHeight},gpsPoint:point&&{x:point.x,y:point.y},roadNameSize:roadNameLayer?.layout?.['text-size'],roadWidth:roadLayer?.paint?.['line-width']}
       :{renderer:'leaflet',zoom:state.map?.getZoom?.(),bearing:state.cameraBearing,pitch:0,mapSize:state.map?.getSize?.(),gpsPoint:state.map?.latLngToContainerPoint?.([state.current.lat,state.current.lon])};
   };
 }
