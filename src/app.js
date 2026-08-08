@@ -1298,8 +1298,8 @@ function addDriverRoute(map){
   ];
   for(const layer of layers)map.addLayer(layer,firstLabel);
   map.addSource('maneuver-surface-arrow',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
-  map.addLayer({id:'maneuver-surface-line',type:'line',source:'maneuver-surface-arrow',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#f7d34d','line-opacity':.94,'line-width':['interpolate',['linear'],['zoom'],15,8,18,14,20,17]}},firstLabel);
-  map.addLayer({id:'maneuver-surface-symbol',type:'symbol',source:'maneuver-surface-arrow',layout:{'symbol-placement':'line-center','text-field':'➤','text-font':['Noto Sans Bold'],'text-size':['interpolate',['linear'],['zoom'],15,24,18,36,20,42],'text-rotation-alignment':'map','text-pitch-alignment':'map','text-keep-upright':false,'text-allow-overlap':true},paint:{'text-color':'#f4bf21','text-halo-color':'#795500','text-halo-width':2}},firstLabel);
+  map.addLayer({id:'maneuver-surface-line',type:'line',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'path'],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#f7d34d','line-opacity':.94,'line-width':['interpolate',['linear'],['zoom'],15,8,18,14,20,17]}},firstLabel);
+  map.addLayer({id:'maneuver-surface-arrowhead',type:'fill',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'arrow'],paint:{'fill-color':'#f4bf21','fill-opacity':1,'fill-outline-color':'#795500'}},firstLabel);
   updateManeuverSurfaceArrow(map);
 }
 
@@ -1316,6 +1316,47 @@ function routePartByDistance(coords=[],maxMeters=65,fromEnd=false){
   return fromEnd?result.reverse():result;
 }
 
+function pointAlongRoute(coords=[],wantedMeters=0){
+  let travelled=0;
+  for(let index=1;index<coords.length;index++){
+    const from=coords[index-1],to=coords[index];
+    const length=haversine(from[1],from[0],to[1],to[0]);
+    if(travelled+length>=wantedMeters&&length>0){
+      const ratio=(wantedMeters-travelled)/length;
+      return {point:[from[0]+(to[0]-from[0])*ratio,from[1]+(to[1]-from[1])*ratio],bearing:bearingBetween(from[1],from[0],to[1],to[0])};
+    }
+    travelled+=length;
+  }
+  const last=coords.at(-1),before=coords.at(-2);
+  return last&&before?{point:last,bearing:bearingBetween(before[1],before[0],last[1],last[0])}:null;
+}
+
+function offsetMapPoint(point,bearing,meters){
+  const radians=bearing*Math.PI/180,latRadians=point[1]*Math.PI/180;
+  return [point[0]+Math.sin(radians)*meters/(111320*Math.max(.2,Math.cos(latRadians))),point[1]+Math.cos(radians)*meters/110540];
+}
+
+function maneuverArrowPolygon(outgoing=[]){
+  if(outgoing.length<2)return null;
+  let total=0;
+  for(let index=1;index<outgoing.length;index++)total+=haversine(outgoing[index-1][1],outgoing[index-1][0],outgoing[index][1],outgoing[index][0]);
+  const placement=pointAlongRoute(outgoing,Math.min(46,Math.max(20,total*.62)));
+  if(!placement)return null;
+  const {point,bearing}=placement,back=(distance)=>offsetMapPoint(point,bearing+180,distance);
+  const shoulder=back(12),base=back(30);
+  const ring=[
+    point,
+    offsetMapPoint(shoulder,bearing-90,9),
+    offsetMapPoint(shoulder,bearing-90,3.4),
+    offsetMapPoint(base,bearing-90,3.4),
+    offsetMapPoint(base,bearing+90,3.4),
+    offsetMapPoint(shoulder,bearing+90,3.4),
+    offsetMapPoint(shoulder,bearing+90,9),
+    point
+  ];
+  return {type:'Polygon',coordinates:[ring]};
+}
+
 function maneuverSurfaceArrowData(){
   const empty={type:'FeatureCollection',features:[]};
   const steps=state.route?.legs?.[0]?.steps||[],index=state.instructionStepIndex;
@@ -1325,7 +1366,11 @@ function maneuverSurfaceArrowData(){
   const incoming=routePartByDistance(steps[Math.max(0,index-1)]?.geometry?.coordinates||[],70,true);
   const outgoing=routePartByDistance(step.geometry?.coordinates||[],80,false);
   const coordinates=[...incoming,...outgoing].filter((point,pointIndex,all)=>pointIndex===0||point[0]!==all[pointIndex-1][0]||point[1]!==all[pointIndex-1][1]);
-  return coordinates.length>1?{type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{type:'LineString',coordinates}}]}:empty;
+  if(coordinates.length<2)return empty;
+  const features=[{type:'Feature',properties:{kind:'path'},geometry:{type:'LineString',coordinates}}];
+  const arrow=maneuverArrowPolygon(outgoing);
+  if(arrow)features.push({type:'Feature',properties:{kind:'arrow'},geometry:arrow});
+  return {type:'FeatureCollection',features};
 }
 
 function updateManeuverSurfaceArrow(map=state.driverMap){
@@ -1810,18 +1855,30 @@ function escapeHtml(value=''){return String(value).replace(/[&<>'"]/g,c=>({'&':'
 
 function enableDriveDemo() {
   const demo=new URLSearchParams(location.search).get('demo');
-  if(demo!=='route'&&demo!=='junction'&&demo!=='overview')return;
+  if(demo!=='route'&&demo!=='junction'&&demo!=='overview'&&demo!=='turn')return;
+  const turning=demo==='turn';
   const motorway=demo==='junction';
   const overview=demo==='overview';
   state.screen=overview?'summary':'drive';
   const start=motorway?{lat:48.7758,lon:9.1829}:{lat:51.588507,lon:7.314882};
   const finish=motorway?{lat:48.86,lon:9.32}:{lat:51.5730,lon:7.2990};
+  if(turning){
+    const before={lat:51.58810,lon:7.31420},current={lat:51.58842,lon:7.31420},corner={lat:51.58882,lon:7.31420},after={lat:51.58882,lon:7.31545};
+    state.demoMode=true;state.navigationMode='driving';state.screen='drive';state.hasMoved=true;state.hasLiveFix=true;state.lastFixTime=Date.now();state.current={...current,accuracy:4,speed:10,heading:0};
+    state.destination={...after,display_name:'Testziel nach der Kreuzung'};
+    state.route={distance:150,duration:24,geometry:{coordinates:[[before.lon,before.lat],[corner.lon,corner.lat],[after.lon,after.lat]]},legs:[{steps:[
+      {distance:80,duration:12,name:'Geradeausstraße',maneuver:{type:'depart',modifier:'straight',location:[before.lon,before.lat]},geometry:{coordinates:[[before.lon,before.lat],[corner.lon,corner.lat]]}},
+      {distance:70,duration:12,name:'Abbiegestraße',maneuver:{type:'turn',modifier:'right',location:[corner.lon,corner.lat]},geometry:{coordinates:[[corner.lon,corner.lat],[after.lon,after.lat]]}}
+    ]}]};
+    state.routeStepIndex=0;state.instructionStepIndex=1;
+  }else{
   state.demoMode=true;state.navigationMode=overview?'overview':'driving';state.hasMoved=true;state.hasLiveFix=true;state.lastFixTime=Date.now();state.current={...start,accuracy:5,speed:25,heading:0};
   state.destination={...finish,display_name:motorway?'Hamburg':'Castrop-Rauxel Hauptbahnhof'};
   state.route={distance:3000,duration:360,geometry:{coordinates:[[start.lon,start.lat],[finish.lon,finish.lat]]},legs:[{steps:[{distance:3000,duration:360,name:motorway?'A 8':'Römerstraße',ref:motorway?'A 8':'',maneuver:{type:motorway?'off ramp':'depart',modifier:motorway?'right':'straight',location:[start.lon,start.lat]},geometry:{coordinates:[[start.lon,start.lat],[finish.lon,finish.lat]]},intersections:motorway?[{lanes:[{indications:['straight'],valid:false},{indications:['straight'],valid:false},{indications:['slight right'],valid:true},{indications:['right'],valid:true}]}]:[]}]}]};
   if(!motorway)fetch(`https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${finish.lon},${finish.lat}?steps=true&geometries=geojson&overview=full`).then(response=>response.ok?response.json():null).then(data=>{
     if(data?.routes?.[0]&&state.demoMode){state.route=data.routes[0];const [lon,lat]=data.routes[0].geometry.coordinates[0];state.current={...state.current,lat,lon};render();}
   }).catch(()=>{});
+  }
   window.__classicDriveDebug=()=>{
     const driver=state.driverMap;
     const point=driver?.project?.([state.current.lon,state.current.lat]);
