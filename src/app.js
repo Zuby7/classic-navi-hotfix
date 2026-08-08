@@ -17,6 +17,7 @@ const state = {
   summaryMap: null,
   previewMap: null,
   userMarker: null,
+  destinationMarker: null,
   routeLine: null,
   cameraBearing: null,
   bearingAnimation: 0,
@@ -153,7 +154,7 @@ if(state.positionAnimation){cancelAnimationFrame(state.positionAnimation);state.
   if (state.map) { state.map.remove(); state.map = null; }
   if (state.driverMap) { state.driverMap.remove(); state.driverMap = null; }
   state.driverMapReady=false;
-  state.userMarker=null;
+  state.userMarker=null;state.destinationMarker=null;
   if (state.summaryMap) { state.summaryMap.remove(); state.summaryMap = null; }
   if (state.previewMap) { state.previewMap.remove(); state.previewMap = null; }
   const content = {
@@ -1215,6 +1216,10 @@ function initLeafletDriveMap(driver=isDriverMode()) {
   const guide=driverVehicleHeading(state.current,state.current.heading);
   const custom=L.divIcon({className:'',html:`<div class="position-marker-shell"><div class="position-marker" style="transform:rotate(${state.current.heading||guide}deg)"></div></div>`,iconSize:[30,40],iconAnchor:[15,32]});
   state.userMarker=L.marker(pos,{icon:custom,opacity:driver?0:1,interactive:false}).addTo(state.map);
+  if(state.destination){
+    const flag=L.divIcon({className:'',html:'<div class="destination-flag"><span class="destination-flag-cloth"></span><span class="destination-flag-pole"></span></div>',iconSize:[38,48],iconAnchor:[8,46]});
+    state.destinationMarker=L.marker([state.destination.lat,state.destination.lon],{icon:flag,interactive:false,zIndexOffset:700}).addTo(state.map);
+  }
   if(!driver){
     state.cameraBearing=null;
     if(state.route)state.map.fitBounds(L.latLngBounds(routeCoordinates().map(([lon,lat])=>[lat,lon])),{padding:[20,20]});
@@ -1309,8 +1314,13 @@ function routePartByDistance(coords=[],maxMeters=65,fromEnd=false){
   const result=[source[0]];let distance=0;
   for(let index=1;index<source.length;index++){
     const previous=source[index-1],point=source[index];
-    distance+=haversine(previous[1],previous[0],point[1],point[0]);
-    result.push(point);
+    const segment=haversine(previous[1],previous[0],point[1],point[0]);
+    if(distance+segment>maxMeters&&segment>0){
+      const ratio=(maxMeters-distance)/segment;
+      result.push([previous[0]+(point[0]-previous[0])*ratio,previous[1]+(point[1]-previous[1])*ratio]);
+      break;
+    }
+    distance+=segment;result.push(point);
     if(distance>=maxMeters)break;
   }
   return fromEnd?result.reverse():result;
@@ -1343,15 +1353,15 @@ function maneuverArrowPolygon(outgoing=[]){
   const placement=pointAlongRoute(outgoing,Math.min(46,Math.max(20,total*.62)));
   if(!placement)return null;
   const {point,bearing}=placement,back=(distance)=>offsetMapPoint(point,bearing+180,distance);
-  const shoulder=back(12),base=back(30);
+  const shoulder=back(9),base=back(23);
   const ring=[
     point,
-    offsetMapPoint(shoulder,bearing-90,9),
-    offsetMapPoint(shoulder,bearing-90,3.4),
-    offsetMapPoint(base,bearing-90,3.4),
-    offsetMapPoint(base,bearing+90,3.4),
-    offsetMapPoint(shoulder,bearing+90,3.4),
-    offsetMapPoint(shoulder,bearing+90,9),
+    offsetMapPoint(shoulder,bearing-90,8),
+    offsetMapPoint(shoulder,bearing-90,3.2),
+    offsetMapPoint(base,bearing-90,3.2),
+    offsetMapPoint(base,bearing+90,3.2),
+    offsetMapPoint(shoulder,bearing+90,3.2),
+    offsetMapPoint(shoulder,bearing+90,8),
     point
   ];
   return {type:'Polygon',coordinates:[ring]};
@@ -1363,8 +1373,8 @@ function maneuverSurfaceArrowData(){
   const step=steps[index],type=(step?.maneuver?.type||'').toLowerCase(),modifier=(step?.maneuver?.modifier||'').toLowerCase();
   const turns=modifier.includes('left')||modifier.includes('right')||modifier.includes('uturn')||type.includes('ramp')||type==='fork'||type==='roundabout'||type==='rotary';
   if(!step||!turns||!hasPosition()||distanceToStep(step)>190)return empty;
-  const incoming=routePartByDistance(steps[Math.max(0,index-1)]?.geometry?.coordinates||[],70,true);
-  const outgoing=routePartByDistance(step.geometry?.coordinates||[],80,false);
+  const incoming=routePartByDistance(steps[Math.max(0,index-1)]?.geometry?.coordinates||[],30,true);
+  const outgoing=routePartByDistance(step.geometry?.coordinates||[],38,false);
   const coordinates=[...incoming,...outgoing].filter((point,pointIndex,all)=>pointIndex===0||point[0]!==all[pointIndex-1][0]||point[1]!==all[pointIndex-1][1]);
   if(coordinates.length<2)return empty;
   const features=[{type:'Feature',properties:{kind:'path'},geometry:{type:'LineString',coordinates}}];
@@ -1421,6 +1431,11 @@ function initDriverMapLibre(){
       state.driverMapReady=true;
       quietDriverStyle(map);
       addDriverRoute(map);
+      if(state.destination){
+        const flag=document.createElement('div');flag.className='destination-flag';
+        flag.innerHTML='<span class="destination-flag-cloth"></span><span class="destination-flag-pole"></span>';
+        state.destinationMarker=new maplibregl.Marker({element:flag,anchor:'bottom-left'}).setLngLat([state.destination.lon,state.destination.lat]).addTo(map);
+      }
       updateDriverCamera(state.current,guide,true);
     });
     map.once('webglcontextlost',()=>fallBackToLeafletDriver());

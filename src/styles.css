@@ -257,6 +257,9 @@ button { touch-action: manipulation; cursor: pointer; }
 .fixed-position-marker { position:absolute; z-index:445; left:50%; top:54%; width:34px; height:42px; transform:translate(-50%,-50%); pointer-events:none; filter:drop-shadow(0 3px 3px #102a45aa); }
 .fixed-position-marker svg { display:block; width:100%; height:100%; overflow:visible; }
 .chevron-outline { fill:#f8ffff; stroke:#123e58; stroke-width:3; stroke-linejoin:round; }.chevron-fill { fill:#1bd7df; }.chevron-core { fill:#168aa9; }
+.destination-flag { position:relative; width:38px; height:48px; pointer-events:none; filter:drop-shadow(0 2px 2px #fff) drop-shadow(0 2px 2px #0008); }
+.destination-flag-pole { position:absolute; left:5px; top:2px; width:4px; height:44px; border-radius:2px; background:#222; }
+.destination-flag-cloth { position:absolute; z-index:1; left:8px; top:3px; width:27px; height:20px; border:2px solid #222; transform:skewY(-5deg); transform-origin:left top; background:conic-gradient(#fff 25%,#222 0 50%,#fff 0 75%,#222 0) 0 0/12px 12px; clip-path:polygon(0 0,100% 0,88% 50%,100% 100%,0 100%); }
 .xl-map-control { position:absolute; z-index:447; right:8px; width:40px; height:40px; display:flex; align-items:center; justify-content:center; padding:0; border:2px solid #727b7b; border-radius:8px; background:linear-gradient(#f9faf7,#d5dbd7); color:#222; box-shadow:0 1px 3px #0007; font-size:0; font-weight:700; line-height:1; }
 .xl-map-control::before { display:block; font-family:Arial,sans-serif; font-size:32px; font-weight:700; line-height:1; transform:translateY(-1px); }
 .xl-minus::before { content:"−"; transform:translateY(-3px); }
