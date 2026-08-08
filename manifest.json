@@ -1,0 +1,55 @@
+﻿{
+    "version":  "2.9.3",
+    "minimumShellVersion":  23,
+    "files":  [
+                  {
+                      "path":  "index.html",
+                      "sha256":  "99979b1f32586ddbcd77e305626a2c53283b156579de5c72e29654343405e1aa",
+                      "bytes":  1343,
+                      "url":  "index.html"
+                  },
+                  {
+                      "path":  "src/app.js",
+                      "sha256":  "d7f7691c7b67de39d23804c73e46edc4113993483263978b3b69bad9159bf01c",
+                      "bytes":  111916,
+                      "url":  "src/app.js"
+                  },
+                  {
+                      "path":  "src/styles.css",
+                      "sha256":  "f638414541e67a0c09e39f025e85768cd3909f7aa4906bb6524475b6a76dfdc4",
+                      "bytes":  28555,
+                      "url":  "src/styles.css"
+                  },
+                  {
+                      "path":  "vendor/leaflet-rotate.js",
+                      "sha256":  "4dae04e684466dc24346a99fa7aa9bccaeee0ef690c91d320ce18fe818b5360f",
+                      "bytes":  21644,
+                      "url":  "vendor/leaflet-rotate.js"
+                  },
+                  {
+                      "path":  "vendor/maplibre-gl.js",
+                      "sha256":  "45a9b07a9189ce56054c620a947ccf41e291e58c95e9b61533b740aaa65ee5cb",
+                      "bytes":  1056837,
+                      "url":  "vendor/maplibre-gl.js"
+                  },
+                  {
+                      "path":  "vendor/maplibre-gl.css",
+                      "sha256":  "ab1e70d59ec40465bae7e7030da2f3ccf28133fd502e62bd598eefbadfd7a732",
+                      "bytes":  70024,
+                      "url":  "vendor/maplibre-gl.css"
+                  },
+                  {
+                      "path":  "manifest.webmanifest",
+                      "sha256":  "e7aa99ca6967914f045442516af401ab2952a016d4962148d7af087ae6870b50",
+                      "bytes":  459,
+                      "url":  "manifest.webmanifest"
+                  },
+                  {
+                      "path":  "classic-navi.svg",
+                      "sha256":  "160a8cfc732e012b925e0758c40ace572883a55fd584664c6f0a8c5085d8ab79",
+                      "bytes":  657,
+                      "url":  "classic-navi.svg"
+                  }
+              ],
+    "signature":  "Al6O3rvhcCQSZKBSuaSSY3dMXJseIGlrA3+WXkQ9++c="
+}

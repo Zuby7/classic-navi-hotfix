@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#202020" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./classic-navi.svg" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <link rel="stylesheet" href="./vendor/maplibre-gl.css" />
+    <link rel="stylesheet" href="./src/styles.css" />
+    <title>Classic Navi</title>
+  </head>
+  <body>
+    <main id="app" aria-live="polite"></main>
+    <div id="rotate-hint">
+      <div class="rotate-phone">↻</div>
+      <strong>Bitte Handy quer drehen</strong>
+      <span>Wie beim alten Navigationsgerät</span>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="./vendor/maplibre-gl.js"></script>
+    <script type="module" src="./vendor/leaflet-rotate.js"></script>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

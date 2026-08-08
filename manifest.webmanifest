@@ -1,0 +1,18 @@
+{
+  "name": "Classic Navi",
+  "short_name": "Classic Navi",
+  "description": "Klassische, einfach bedienbare Navigation im Stil eines großen 6-Zoll-Navigationsgeräts.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#1b1b1b",
+  "theme_color": "#202020",
+  "icons": [
+    {
+      "src": "/classic-navi.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
