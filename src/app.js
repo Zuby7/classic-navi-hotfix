@@ -1303,8 +1303,8 @@ function addDriverRoute(map){
   ];
   for(const layer of layers)map.addLayer(layer,firstLabel);
   map.addSource('maneuver-surface-arrow',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
-  map.addLayer({id:'maneuver-surface-line',type:'line',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'path'],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#f7d34d','line-opacity':.94,'line-width':['interpolate',['linear'],['zoom'],15,8,18,14,20,17]}},firstLabel);
-  map.addLayer({id:'maneuver-surface-arrowhead',type:'fill',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'arrow'],paint:{'fill-color':'#f4bf21','fill-opacity':1,'fill-outline-color':'#795500'}},firstLabel);
+  map.addLayer({id:'maneuver-surface-line',type:'line',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'path'],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#f5c51b','line-opacity':1,'line-width':['interpolate',['linear'],['zoom'],15,8,18,14,20,17]}},firstLabel);
+  map.addLayer({id:'maneuver-surface-arrowhead',type:'fill',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'arrow'],paint:{'fill-color':'#f5c51b','fill-opacity':1,'fill-outline-color':'#795500'}},firstLabel);
   updateManeuverSurfaceArrow(map);
 }
 
@@ -1350,7 +1350,9 @@ function maneuverArrowPolygon(outgoing=[]){
   if(outgoing.length<2)return null;
   let total=0;
   for(let index=1;index<outgoing.length;index++)total+=haversine(outgoing[index-1][1],outgoing[index-1][0],outgoing[index][1],outgoing[index][0]);
-  const placement=pointAlongRoute(outgoing,Math.min(46,Math.max(20,total*.62)));
+  // Die Pfeilspitze sitzt exakt auf dem Ende der gelben Linie. Dadurch bleibt
+  // nach der Spitze garantiert kein gelber Rest auf der Zielstraße sichtbar.
+  const placement=pointAlongRoute(outgoing,total);
   if(!placement)return null;
   const {point,bearing}=placement,back=(distance)=>offsetMapPoint(point,bearing+180,distance);
   const shoulder=back(9),base=back(23);
@@ -1374,7 +1376,7 @@ function maneuverSurfaceArrowData(){
   const turns=modifier.includes('left')||modifier.includes('right')||modifier.includes('uturn')||type.includes('ramp')||type==='fork'||type==='roundabout'||type==='rotary';
   if(!step||!turns||!hasPosition()||distanceToStep(step)>190)return empty;
   const incoming=routePartByDistance(steps[Math.max(0,index-1)]?.geometry?.coordinates||[],30,true);
-  const outgoing=routePartByDistance(step.geometry?.coordinates||[],38,false);
+  const outgoing=routePartByDistance(step.geometry?.coordinates||[],30,false);
   const coordinates=[...incoming,...outgoing].filter((point,pointIndex,all)=>pointIndex===0||point[0]!==all[pointIndex-1][0]||point[1]!==all[pointIndex-1][1]);
   if(coordinates.length<2)return empty;
   const features=[{type:'Feature',properties:{kind:'path'},geometry:{type:'LineString',coordinates}}];
