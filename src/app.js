@@ -647,15 +647,25 @@ function isStreetFeature(feature) {
   return true;
 }
 
+const ADDRESS_SUGGESTION_MIN_CHARS=2;
+const ADDRESS_SUGGESTION_DEBOUNCE_MS=220;
+
+function suggestionSearchDelay(value){
+  const length=Array.from(String(value||'').trim()).length;
+  if(length<ADDRESS_SUGGESTION_MIN_CHARS)return null;
+  return length===ADDRESS_SUGGESTION_MIN_CHARS?0:ADDRESS_SUGGESTION_DEBOUNCE_MS;
+}
+
 function scheduleSuggestions(){
   clearTimeout(state.suggestionTimer);
   const value=wizardValue().trim();
-  if(value.length<2||state.wizardStep==='number'||state.wizardStep==='postcode')return;
-  state.suggestionTimer=setTimeout(loadSuggestions,700);
+  const delay=suggestionSearchDelay(value);
+  if(delay===null||state.wizardStep==='number'||state.wizardStep==='postcode')return;
+  state.suggestionTimer=setTimeout(loadSuggestions,delay);
 }
 
 async function loadSuggestions(){
-  const step=state.wizardStep,value=wizardValue().trim(); if(value.length<2)return;
+  const step=state.wizardStep,value=wizardValue().trim(); if(suggestionSearchDelay(value)===null)return;
   const query=step==='city'?value:`${value}, ${state.address.city || state.address.postcode}`;
   const bias=state.cityContext?`&lat=${state.cityContext.lat}&lon=${state.cityContext.lon}`:hasPosition()?`&lat=${state.current.lat}&lon=${state.current.lon}`:'';
   try{
