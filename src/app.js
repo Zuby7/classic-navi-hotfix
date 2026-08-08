@@ -36,6 +36,8 @@ const state = {
   wizardStep: new URLSearchParams(location.search).get('step') || 'city',
   suggestions: [],
   suggestionTimer: null,
+  suggestionRequestId: 0,
+  suggestionAbortController: null,
   cityContext: null,
   notice: '',
   loading: false,
@@ -648,7 +650,7 @@ function isStreetFeature(feature) {
 }
 
 const ADDRESS_SUGGESTION_MIN_CHARS=2;
-const ADDRESS_SUGGESTION_DEBOUNCE_MS=220;
+const ADDRESS_SUGGESTION_DEBOUNCE_MS=120;
 
 function suggestionSearchDelay(value){
   const length=Array.from(String(value||'').trim()).length;
@@ -658,30 +660,43 @@ function suggestionSearchDelay(value){
 
 function scheduleSuggestions(){
   clearTimeout(state.suggestionTimer);
+  state.suggestionAbortController?.abort();
+  state.suggestionAbortController=null;
+  const requestId=++state.suggestionRequestId;
   const value=wizardValue().trim();
   const delay=suggestionSearchDelay(value);
   if(delay===null||state.wizardStep==='number'||state.wizardStep==='postcode')return;
-  state.suggestionTimer=setTimeout(loadSuggestions,delay);
+  state.suggestionTimer=setTimeout(()=>loadSuggestions(requestId),delay);
 }
 
-async function loadSuggestions(){
+async function loadSuggestions(requestId=++state.suggestionRequestId){
   const step=state.wizardStep,value=wizardValue().trim(); if(suggestionSearchDelay(value)===null)return;
   const query=step==='city'?value:`${value}, ${state.address.city || state.address.postcode}`;
   const bias=state.cityContext?`&lat=${state.cityContext.lat}&lon=${state.cityContext.lon}`:hasPosition()?`&lat=${state.current.lat}&lon=${state.current.lon}`:'';
-  try{
-    const tomtom=await tomTomPlacesSuggest(value,step);
-    if(state.wizardStep!==step||wizardValue().trim()!==value)return;
-    const recent=recentAddressSuggestions(value,step);
-    const seen=new Set(recent.map(x=>normalizeSearch(x.display_name)));
-    state.suggestions=[...recent,...tomtom.filter(x=>!seen.has(normalizeSearch(x.display_name)))].slice(0,3); render();
-  }catch{
-    try{
-      const data=await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&lang=de&limit=3${bias}`).then(r=>{if(!r.ok)throw new Error();return r.json();});
-      if(state.wizardStep!==step||wizardValue().trim()!==value)return;
-      const filtered=(data.features||[]).filter(step==='city'?isCityFeature:isStreetFeature).map(photonItem),recent=recentAddressSuggestions(value,step);
-      state.suggestions=[...recent,...filtered].slice(0,3);render();
-    }catch{state.suggestions=recentAddressSuggestions(value,step);render();}
+  const controller=typeof AbortController==='function'?new AbortController():{signal:undefined,abort(){}};
+  state.suggestionAbortController=controller;
+  const [tomtomResult,photonResult]=await Promise.allSettled([
+    tomTomPlacesSuggest(value,step,{signal:controller.signal}),
+    fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&lang=de&limit=5${bias}`,{signal:controller.signal})
+      .then(r=>{if(!r.ok)throw new Error(`photon-${r.status}`);return r.json();})
+      .then(data=>(data.features||[]).filter(step==='city'?isCityFeature:isStreetFeature).map(photonItem)),
+  ]);
+  if(requestId!==state.suggestionRequestId||state.wizardStep!==step||wizardValue().trim()!==value)return;
+  state.suggestionAbortController=null;
+  const recent=recentAddressSuggestions(value,step);
+  const online=[
+    ...(tomtomResult.status==='fulfilled'?tomtomResult.value:[]),
+    ...(photonResult.status==='fulfilled'?photonResult.value:[]),
+  ];
+  const suggestions=[],seen=new Set();
+  for(const item of [...recent,...online]){
+    const identity=normalizeSearch(item.properties?.street||item.properties?.name||item.display_name);
+    if(!identity||seen.has(identity))continue;
+    seen.add(identity);suggestions.push(item);
+    if(suggestions.length===3)break;
   }
+  state.suggestions=suggestions;
+  render();
 }
 
 function photonItem(feature){
@@ -720,14 +735,14 @@ async function tomTomStructuredAddress({streetName='',streetNumber='',crossStree
   return (await response.json()).results?.map(tomTomItem).filter(item=>Number.isFinite(item.lat)&&Number.isFinite(item.lon))||[];
 }
 
-async function tomTomPlacesSuggest(query,step){
+async function tomTomPlacesSuggest(query,step,{signal}={}){
   const cityStep=step==='city',types=cityStep?['area']:['street','intersection'];
   const filters={types,countryCodesIso2:['DE']};
   if(cityStep)filters.areaTypes=['municipality','municipalitySubdivision'];
   else if(Number.isFinite(state.cityContext?.lat)&&Number.isFinite(state.cityContext?.lon))filters.geometry={type:'circle',center:[state.cityContext.lon,state.cityContext.lat],radiusInMeters:30000};
   const body={query,maxResults:5,filters};
   if(hasPosition())body.origin={type:'point',coordinates:[state.current.lon,state.current.lat]};
-  const response=await fetch('https://api.tomtom.com/maps/orbis/places/suggest',{method:'POST',headers:{'TomTom-Api-Key':TOMTOM_API_KEY,'TomTom-Api-Version':'3','Attributes':'results(title,subtitles,type)','Accept-Language':'de-DE','Content-Type':'application/json'},body:JSON.stringify(body)});
+  const response=await fetch('https://api.tomtom.com/maps/orbis/places/suggest',{method:'POST',signal,headers:{'TomTom-Api-Key':TOMTOM_API_KEY,'TomTom-Api-Version':'3','Attributes':'results(title,subtitles,type)','Accept-Language':'de-DE','Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!response.ok){const error=new Error(`tomtom-places-${response.status}`);error.status=response.status;throw error;}
   return ((await response.json()).results||[]).filter(result=>result.type!=='discoverAction').filter(result=>cityStep||suggestionCityMatches((result.subtitles||[])[0])).map(result=>{
     const subtitles=result.subtitles||[],city=cityStep?result.title:(subtitles[0]||state.address.city).replace(/^\d{5}\s*/,''),street=cityStep?'':result.title;
