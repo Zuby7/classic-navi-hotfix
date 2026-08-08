@@ -55,6 +55,7 @@ const state = {
   instructionStepIndex: 0,
   hasMoved: false,
   lastFix: null,
+  motionFixes: 0,
   demoMode: false,
   junctionStepKey: -1,
   junctionShownAt: 0,
@@ -1247,15 +1248,26 @@ function quietDriverStyle(map){
     if(layer.type==='fill-extrusion'||(layer.type==='symbol'&&/(^|[-_])(poi|housenumber|house-number|amenity|transit|airport)([-_]|$)/.test(id))){
       try{map.setLayoutProperty(layer.id,'visibility','none');}catch{}
     }
+    if(layer.type==='line'&&layer['source-layer']==='transportation'&&/^(road|bridge|tunnel)[-_]/.test(id)&&!/(path|rail|ferry|aerialway)/.test(id)){
+      const casing=/casing/.test(id);
+      const major=/(motorway|trunk|primary)/.test(id);
+      const minor=/(street|minor|service)/.test(id);
+      const widths=major
+        ?(casing?[14,8,16,13,18,22,20,31]:[14,5,16,9,18,16,20,23])
+        :(minor?(casing?[14,5,16,9,18,15,20,22]:[14,3,16,6,18,11,20,16])
+          :(casing?[14,7,16,11,18,18,20,26]:[14,4,16,8,18,13,20,19]));
+      try{map.setPaintProperty(layer.id,'line-width',['interpolate',['linear'],['zoom'],...widths]);}catch{}
+    }
     if(layer.type==='symbol'&&layer['source-layer']==='transportation_name'&&/highway-name-(path|minor|major)/.test(id)){
-      try{
-        map.setLayoutProperty(layer.id,'text-font',['Noto Sans Bold']);
-        map.setLayoutProperty(layer.id,'text-size',['interpolate',['linear'],['zoom'],13,15,16,18,18,22,20,25]);
-        map.setLayoutProperty(layer.id,'symbol-spacing',500);
-        map.setPaintProperty(layer.id,'text-color','#1a2429');
-        map.setPaintProperty(layer.id,'text-halo-color','#f7f8f1');
-        map.setPaintProperty(layer.id,'text-halo-width',2);
-      }catch{}
+      // Jede Eigenschaft separat setzen: Ein auf einem Tile-Server fehlender Bold-Font
+      // darf nicht mehr verhindern, dass Größe, Abstand und Halo angewendet werden.
+      try{map.setLayoutProperty(layer.id,'text-size',['interpolate',['linear'],['zoom'],13,20,15,25,17,30,19,36]);}catch{}
+      try{map.setLayoutProperty(layer.id,'symbol-spacing',650);}catch{}
+      try{map.setPaintProperty(layer.id,'text-color','#111a1f');}catch{}
+      try{map.setPaintProperty(layer.id,'text-halo-color','#fbfcf5');}catch{}
+      try{map.setPaintProperty(layer.id,'text-halo-width',3.2);}catch{}
+      try{map.setPaintProperty(layer.id,'text-halo-blur',.25);}catch{}
+      try{map.setLayoutProperty(layer.id,'text-font',['Noto Sans Bold']);}catch{}
     }
   }
 }
@@ -1611,20 +1623,35 @@ function acceptGpsPosition(pos){
     const seconds=Math.max(1,(now-state.lastFix.time)/1000);
     derivedSpeed=moved/seconds;
     if(moved>3)derivedHeading=bearingBetween(state.lastFix.lat,state.lastFix.lon,pos.coords.latitude,pos.coords.longitude);
-    if(moved>12)state.hasMoved=true;
     if(seconds<5&&moved>Math.max(500,accuracy*8))return false;
   }
   const previous=hasPosition()?state.current:null;
   state.lastFix={lat:pos.coords.latitude,lon:pos.coords.longitude,time:now};
-  const gpsSpeed=Number.isFinite(pos.coords.speed)?pos.coords.speed:derivedSpeed;
+  const hasReportedSpeed=Number.isFinite(pos.coords.speed);
+  const gpsSpeed=hasReportedSpeed?Math.max(0,pos.coords.speed):derivedSpeed;
+  const displacement=previous?haversine(previous.lat,previous.lon,pos.coords.latitude,pos.coords.longitude):0;
+  const movementThreshold=Math.max(5,Math.min(18,accuracy*.8));
+  const movementEvidence=hasReportedSpeed
+    ?gpsSpeed>=1.1&&displacement>=2
+    :derivedSpeed>=2&&displacement>=movementThreshold;
+  state.motionFixes=movementEvidence?Math.min(4,state.motionFixes+1):0;
+  const moving=!previous||state.motionFixes>=(hasReportedSpeed?2:3);
   const alpha=!previous?1:(gpsSpeed>3?.78:accuracy<25?.55:.35);
-  const target=previous?{lat:previous.lat+(pos.coords.latitude-previous.lat)*alpha,lon:previous.lon+(pos.coords.longitude-previous.lon)*alpha}:{lat:pos.coords.latitude,lon:pos.coords.longitude};
+  // Im Stillstand bleibt die dargestellte Position exakt verriegelt. Rohmessungen
+  // werden weiterhin in lastFix erfasst, bewegen aber weder Pfeil noch Kamera.
+  const target=!previous
+    ?{lat:pos.coords.latitude,lon:pos.coords.longitude}
+    :moving
+      ?{lat:previous.lat+(pos.coords.latitude-previous.lat)*alpha,lon:previous.lon+(pos.coords.longitude-previous.lon)*alpha}
+      :{lat:previous.lat,lon:previous.lon};
   const measuredHeading=Number.isFinite(pos.coords.heading)&&gpsSpeed>1?pos.coords.heading:derivedHeading;
-  const heading=smoothHeading(previous?.heading,measuredHeading,gpsSpeed>5?.68:.48);
-  state.current={...target,accuracy,speed:gpsSpeed||0,heading};
+  const heading=moving?smoothHeading(previous?.heading,measuredHeading,gpsSpeed>5?.68:.48):(previous?.heading||0);
+  const displayedMove=previous?haversine(previous.lat,previous.lon,target.lat,target.lon):0;
+  if(moving&&displayedMove>3)state.hasMoved=true;
+  state.current={...target,accuracy,speed:moving?(gpsSpeed||0):0,heading};
   state.hasLiveFix=true;state.lastFixTime=now;state.gpsLastError='';
   if(state.gpsRetryTimer){clearTimeout(state.gpsRetryTimer);state.gpsRetryTimer=0;}
-  smoothVehicleMove(target,moved);
+  if(moving||!previous)smoothVehicleMove(target,displayedMove);
   maybeReroute();
   maybeCheckLiveTraffic();
   if(state.screen==='drive'){
@@ -1789,8 +1816,9 @@ function enableDriveDemo() {
   window.__classicDriveDebug=()=>{
     const driver=state.driverMap;
     const point=driver?.project?.([state.current.lon,state.current.lat]);
+    const roadNameLayer=driver?.getStyle?.()?.layers?.find(layer=>layer.id==='highway-name-minor');
     return driver
-      ?{renderer:'maplibre',zoom:driver.getZoom(),bearing:driver.getBearing(),pitch:driver.getPitch(),mapSize:{x:driver.getContainer().clientWidth,y:driver.getContainer().clientHeight},gpsPoint:point&&{x:point.x,y:point.y}}
+      ?{renderer:'maplibre',zoom:driver.getZoom(),bearing:driver.getBearing(),pitch:driver.getPitch(),mapSize:{x:driver.getContainer().clientWidth,y:driver.getContainer().clientHeight},gpsPoint:point&&{x:point.x,y:point.y},roadNameSize:roadNameLayer?.layout?.['text-size']}
       :{renderer:'leaflet',zoom:state.map?.getZoom?.(),bearing:state.cameraBearing,pitch:0,mapSize:state.map?.getSize?.(),gpsPoint:state.map?.latLngToContainerPoint?.([state.current.lat,state.current.lon])};
   };
 }
