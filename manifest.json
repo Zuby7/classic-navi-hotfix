@@ -1,5 +1,5 @@
 ﻿{
-    "version":  "2.10.6",
+    "version":  "2.10.7",
     "minimumShellVersion":  23,
     "files":  [
                   {
@@ -10,8 +10,8 @@
                   },
                   {
                       "path":  "src/app.js",
-                      "sha256":  "95a2af354a3a449f3eb4cc107387d5172f0e27e5456b329da25a6c5dd89660b5",
-                      "bytes":  126945,
+                      "sha256":  "d96814aff203f3d99693db32cc008dc0cea8acaa8134edc6895fa535a87c2ef1",
+                      "bytes":  124637,
                       "url":  "src/app.js"
                   },
                   {
@@ -51,5 +51,5 @@
                       "url":  "classic-navi.svg"
                   }
               ],
-    "signature":  "OB1YStbeeyk1x6BLo90MpL+GhCfqwWO6cEuxb2ICpro="
+    "signature":  "/Zek6+npamTyoy1PZ+bkx9nAiP6C1Lp7bLJ3geWtjMs="
 }

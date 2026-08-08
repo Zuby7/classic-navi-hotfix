@@ -1289,7 +1289,7 @@ function quietDriverStyle(map){
 function addDriverRoute(map){
   if(!state.route||map.getSource('active-route'))return;
   const maneuverData=maneuverSurfaceArrowData();
-  const data=activeRouteData(maneuverData);
+  const data={type:'Feature',properties:{},geometry:{type:'LineString',coordinates:routeCoordinates()}};
   map.addSource('active-route',{type:'geojson',data,lineMetrics:true});
   const firstLabel=(map.getStyle()?.layers||[]).find(layer=>layer.type==='symbol')?.id;
   const widths={
@@ -1304,8 +1304,9 @@ function addDriverRoute(map){
   ];
   for(const layer of layers)map.addLayer(layer,firstLabel);
   map.addSource('maneuver-surface-arrow',{type:'geojson',data:maneuverData});
-  map.addLayer({id:'maneuver-surface-line',type:'line',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'path'],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#f5c51b','line-opacity':1,'line-width':['interpolate',['linear'],['zoom'],15,8,18,14,20,17]}},firstLabel);
-  map.addLayer({id:'maneuver-surface-arrowhead',type:'fill',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'arrow'],paint:{'fill-color':'#f5c51b','fill-opacity':1,'fill-outline-color':'#795500'}},firstLabel);
+  map.addLayer({id:'maneuver-surface-line',type:'line',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'path'],layout:{'line-cap':'butt','line-join':'round'},paint:{'line-color':'#f5c51b','line-opacity':1,'line-width':['interpolate',['linear'],['zoom'],15,8,18,14,20,17]}},firstLabel);
+  map.addLayer({id:'maneuver-surface-arrow-outline',type:'line',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'arrow'],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#101c5c','line-width':['interpolate',['linear'],['zoom'],15,2.5,18,4,20,5]}},firstLabel);
+  map.addLayer({id:'maneuver-surface-arrowhead',type:'fill',source:'maneuver-surface-arrow',filter:['==',['get','kind'],'arrow'],paint:{'fill-color':'#f5c51b','fill-opacity':1,'fill-outline-color':'#101c5c'}},firstLabel);
   updateManeuverSurfaceArrow(map);
 }
 
@@ -1380,71 +1381,18 @@ function maneuverSurfaceArrowData(){
   const outgoing=routePartByDistance(step.geometry?.coordinates||[],30,false);
   const arrow=maneuverArrowPolygon(outgoing);
   if(!arrow)return empty;
-  // Die gelbe Linie endet am hinteren Ende des Pfeilkörpers. Unter dem
-  // eigentlichen Pfeil liegt dadurch keine zweite gelbe Linie mehr.
-  const lineOutgoing=routePartByDistance(outgoing,arrow.baseDistance,false);
-  const coordinates=[...incoming,...lineOutgoing].filter((point,pointIndex,all)=>pointIndex===0||point[0]!==all[pointIndex-1][0]||point[1]!==all[pointIndex-1][1]);
+  // Die gelbe Linie bleibt wie die blaue Route unter dem Pfeilkörper liegen.
+  // Ihr gerader Linienabschluss endet exakt an der Pfeilspitze, ohne Überstand.
+  const coordinates=[...incoming,...outgoing].filter((point,pointIndex,all)=>pointIndex===0||point[0]!==all[pointIndex-1][0]||point[1]!==all[pointIndex-1][1]);
   if(coordinates.length<2)return empty;
   const features=[{type:'Feature',properties:{kind:'path'},geometry:{type:'LineString',coordinates}}];
   features.push({type:'Feature',properties:{kind:'arrow'},geometry:arrow.geometry});
   return {type:'FeatureCollection',features};
 }
 
-function nearestRouteMeasure(coords=[],point=[]){
-  if(coords.length<2||point.length<2)return 0;
-  const xScale=111320*Math.cos(point[1]*Math.PI/180),yScale=110540;
-  let cumulative=0,bestDistance=Infinity,bestMeasure=0;
-  for(let index=1;index<coords.length;index++){
-    const a=coords[index-1],b=coords[index];
-    const ax=(a[0]-point[0])*xScale,ay=(a[1]-point[1])*yScale;
-    const bx=(b[0]-point[0])*xScale,by=(b[1]-point[1])*yScale;
-    const dx=bx-ax,dy=by-ay,lengthSquared=dx*dx+dy*dy;
-    const ratio=lengthSquared?Math.max(0,Math.min(1,-(ax*dx+ay*dy)/lengthSquared)):0;
-    const px=ax+dx*ratio,py=ay+dy*ratio,distance=px*px+py*py;
-    const segment=haversine(a[1],a[0],b[1],b[0]);
-    if(distance<bestDistance){bestDistance=distance;bestMeasure=cumulative+segment*ratio;}
-    cumulative+=segment;
-  }
-  return bestMeasure;
-}
-
-function routePointAtMeasure(coords=[],measure=0){
-  let cumulative=0;
-  for(let index=1;index<coords.length;index++){
-    const a=coords[index-1],b=coords[index],segment=haversine(a[1],a[0],b[1],b[0]);
-    if(cumulative+segment>=measure&&segment>0){const ratio=(measure-cumulative)/segment;return [a[0]+(b[0]-a[0])*ratio,a[1]+(b[1]-a[1])*ratio];}
-    cumulative+=segment;
-  }
-  return coords.at(-1);
-}
-
-function routeWithoutManeuver(coords=[],startPoint=[],endPoint=[]){
-  if(coords.length<2)return [coords];
-  let start=nearestRouteMeasure(coords,startPoint),end=nearestRouteMeasure(coords,endPoint);
-  if(end<start)[start,end]=[end,start];
-  let cumulative=0;const before=[coords[0]],after=[routePointAtMeasure(coords,end)];
-  for(let index=1;index<coords.length;index++){
-    const segment=haversine(coords[index-1][1],coords[index-1][0],coords[index][1],coords[index][0]);
-    cumulative+=segment;
-    if(cumulative<start)before.push(coords[index]);
-    if(cumulative>end)after.push(coords[index]);
-  }
-  before.push(routePointAtMeasure(coords,start));
-  return [before,after].filter(part=>part.length>=2);
-}
-
-function activeRouteData(maneuverData=maneuverSurfaceArrowData()){
-  const full=routeCoordinates(),path=maneuverData.features?.find(feature=>feature.properties?.kind==='path');
-  const arrow=maneuverData.features?.find(feature=>feature.properties?.kind==='arrow');
-  if(!path||!arrow)return {type:'Feature',properties:{},geometry:{type:'LineString',coordinates:full}};
-  const start=path.geometry.coordinates[0],tip=arrow.geometry.coordinates[0][0];
-  return {type:'Feature',properties:{},geometry:{type:'MultiLineString',coordinates:routeWithoutManeuver(full,start,tip)}};
-}
-
 function updateManeuverSurfaceArrow(map=state.driverMap){
   const data=maneuverSurfaceArrowData();
   map?.getSource?.('maneuver-surface-arrow')?.setData(data);
-  map?.getSource?.('active-route')?.setData(activeRouteData(data));
 }
 
 function normalizedCourse(value){return ((Number(value)||0)%360+360)%360;}
