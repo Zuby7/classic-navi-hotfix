@@ -208,7 +208,7 @@ function renderDrive() {
 function renderNormalDrive(step, street, distance, stats, speed) {
   const road=step?.name||street;
   const incident=state.trafficIncidents.find(item=>item.distanceAhead<=20000);
-  const secondary=incident?`${incident.label}${incident.distanceAhead>300?` in ${formatDistance(incident.distanceAhead)}`:''}`:(step?.destinations||'Route folgen');
+  const secondary=state.rerouting?'Route wird neu berechnet…':incident?`${incident.label}${incident.distanceAhead>300?` in ${formatDistance(incident.distanceAhead)}`:''}`:(step?.destinations||'Route folgen');
   const marker=isDriverMode()?`<div class="fixed-position-marker navigation-chevron" aria-hidden="true"><svg viewBox="0 0 42 52"><path class="chevron-outline" d="M21 2L40 48 21 39 2 48z"/><path class="chevron-fill" d="M21 8L34 40 21 34 8 40z"/><path class="chevron-core" d="M21 15L28 34 21 31 14 34z"/></svg></div>`:'';
   return `${marker}<button class="xl-map-control xl-minus" data-action="zoomOut" aria-label="Verkleinern">−</button><button class="xl-map-control xl-plus" data-action="zoom" aria-label="Vergrößern">+</button>
     <button class="xl-quick" data-action="addFavorite" aria-label="Favorit hinzufügen">${icon('favorite')}</button>
@@ -342,12 +342,13 @@ function renderTargetPreview() {
 
 function renderSummary() {
   const stats = routeStats();
+  const arrived=state.arrived;
   return `<div class="panel-screen">${screenHeader('Routenübersicht')}<div class="summary-body"><div id="summary-map" class="summary-map"></div><div class="summary-info">
     <div class="summary-destination">${escapeHtml(state.destination?.display_name || 'Gewähltes Ziel')}</div>
     <div class="summary-stat"><span>Entfernung</span><strong>${formatDistance(stats.distance)}</strong></div>
     <div class="summary-stat"><span>Fahrzeit</span><strong>${formatDuration(stats.duration)}</strong></div>
     <div class="summary-stat"><span>Ankunft</span><strong>${timeText(stats.arrival)}</strong></div>
-  </div></div></div><div class="bottom-bar"><button class="bottom-button" data-action="routeChange">Details</button><button class="bottom-button primary" data-action="startNavigation">Fertig</button></div>`;
+  </div></div></div><div class="bottom-bar"><button class="bottom-button" data-action="${arrived?'finishArrival':'routeChange'}">${arrived?'Hauptmenü':'Details'}</button><button class="bottom-button primary" data-action="${arrived?'finishArrival':'startNavigation'}">Fertig</button></div>`;
 }
 
 function renderRouteChange() {
@@ -495,6 +496,7 @@ async function act(action) {
     case 'selectDestination': await planSelectedDestination(); break;
     case 'previewBack': state.screen='wizard'; state.wizardStep=state.previewReturnStep||'number'; state.suggestions=recentAddressSuggestions(wizardValue(),state.wizardStep); state.notice=''; render(); break;
     case 'clearRoute': clearRoute(); break;
+    case 'finishArrival': clearRoute('menu',false); break;
     case 'clearRecent': if(confirm('Alle letzten Suchen löschen?')){state.recent=[];save();speak('Letzte Suchen gelöscht.');render();} break;
     case 'toggleNight': state.night=!state.night; save(); render(); break;
     case 'toggleVoice': state.voice=!state.voice; save(); if(state.voice)speak('Die Sprachausgabe ist eingeschaltet.',true); render(); break;
@@ -984,6 +986,7 @@ function rememberSearch(destination){
 async function calculateRoute(alternative=false,silent=false) {
   if (!state.destination) return;
   if(!hasPosition()||!state.hasLiveFix) throw new Error('gps');
+  const keepDriverMode=silent&&isDriverMode();
   if(!silent){state.loading=true; state.notice=alternative?'Alternative wird berechnet…':'Route wird berechnet…'; render();}
   let route=null;
   if(canUseTomTom()) {
@@ -997,7 +1000,7 @@ async function calculateRoute(alternative=false,silent=false) {
   if(!route)route=await calculateOsrmRoute(alternative);
   state.route=route;
   if(route.provider==='tomtom')state.lastTrafficCheck=Date.now();
-  resetRouteProgress();
+  resetRouteProgress(keepDriverMode?'driving':'overview');
   save();
 }
 
@@ -1151,12 +1154,12 @@ function handleTomTomError(error){
   save();
 }
 
-function resetRouteProgress(){
+function resetRouteProgress(navigationMode='overview'){
   if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;}
-  state.lastInstructionIndex=-1; state.announcedLevels=[]; state.routeStepIndex=0; state.routeProgressReady=false; state.instructionStepIndex=0; state.junctionStepKey=-1; state.junctionShownAt=0; state.offRouteFixes=0; state.navigationMode='overview';state.arrived=false;state.loading=false; state.notice=''; save();
+  state.lastInstructionIndex=-1; state.announcedLevels=[]; state.routeStepIndex=0; state.routeProgressReady=false; state.instructionStepIndex=0; state.junctionStepKey=-1; state.junctionShownAt=0; state.offRouteFixes=0; state.navigationMode=navigationMode;state.arrived=false;state.loading=false; state.notice=''; save();
 }
 
-function clearRoute() { state.trafficRouteToken++;state.route=null; state.destination=null;state.navigationMode='overview';state.arrived=false; state.trafficIncidents=[];state.announcedIncidentIds=[];state.lastInstructionIndex=-1; state.announcedLevels=[]; state.routeStepIndex=0; state.routeProgressReady=false; state.junctionStepKey=-1; state.offRouteFixes=0; if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;} if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false); speak('Route gelöscht.'); go('drive'); }
+function clearRoute(targetScreen='drive',announce=true) { state.trafficRouteToken++;state.route=null; state.destination=null;state.navigationMode='overview';state.arrived=false; state.trafficIncidents=[];state.announcedIncidentIds=[];state.lastInstructionIndex=-1; state.announcedLevels=[]; state.routeStepIndex=0; state.routeProgressReady=false; state.junctionStepKey=-1; state.offRouteFixes=0; if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;} if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false); if(announce)speak('Route gelöscht.'); go(targetScreen); }
 function beginSetHome() { resetAddress(); state.addressMode='streetNumber'; state.wizardStep='city'; localStorage.setItem('setting-home','true'); go('wizard'); }
 
 function initBaseMap(elementId, interactive=true,driveMode=false) {
@@ -1208,7 +1211,7 @@ function initLeafletDriveMap(driver=isDriverMode()) {
   state.routeLine=drawRoute(state.map,driver);
   if(!hasPosition()) { state.map.setView([51.1657,10.4515],6); return; }
   const pos=[state.current.lat,state.current.lon];
-  const guide=routeGuidanceHeading(state.current,state.current.heading);
+  const guide=driverVehicleHeading(state.current,state.current.heading);
   const custom=L.divIcon({className:'',html:`<div class="position-marker-shell"><div class="position-marker" style="transform:rotate(${state.current.heading||guide}deg)"></div></div>`,iconSize:[30,40],iconAnchor:[15,32]});
   state.userMarker=L.marker(pos,{icon:custom,opacity:driver?0:1,interactive:false}).addTo(state.map);
   if(!driver){
@@ -1226,7 +1229,7 @@ function initLeafletDriveMap(driver=isDriverMode()) {
 const DRIVER_STYLE='https://tiles.openfreemap.org/styles/liberty';
 const DRIVER_PITCH=55;
 const DRIVER_ANCHOR_Y=.74;
-const DRIVER_BASE_ZOOM=16.7;
+const DRIVER_BASE_ZOOM=17.35;
 
 function driverZoom(speed=state.current.speed){
   const kmh=Math.max(0,Number(speed)||0)*3.6;
@@ -1244,6 +1247,16 @@ function quietDriverStyle(map){
     if(layer.type==='fill-extrusion'||(layer.type==='symbol'&&/(^|[-_])(poi|housenumber|house-number|amenity|transit|airport)([-_]|$)/.test(id))){
       try{map.setLayoutProperty(layer.id,'visibility','none');}catch{}
     }
+    if(layer.type==='symbol'&&layer['source-layer']==='transportation_name'&&/highway-name-(path|minor|major)/.test(id)){
+      try{
+        map.setLayoutProperty(layer.id,'text-font',['Noto Sans Bold']);
+        map.setLayoutProperty(layer.id,'text-size',['interpolate',['linear'],['zoom'],13,15,16,18,18,22,20,25]);
+        map.setLayoutProperty(layer.id,'symbol-spacing',500);
+        map.setPaintProperty(layer.id,'text-color','#1a2429');
+        map.setPaintProperty(layer.id,'text-halo-color','#f7f8f1');
+        map.setPaintProperty(layer.id,'text-halo-width',2);
+      }catch{}
+    }
   }
 }
 
@@ -1253,9 +1266,9 @@ function addDriverRoute(map){
   map.addSource('active-route',{type:'geojson',data,lineMetrics:true});
   const firstLabel=(map.getStyle()?.layers||[]).find(layer=>layer.type==='symbol')?.id;
   const widths={
-    outline:['interpolate',['linear'],['zoom'],14,10,17,16,19,21],
-    main:['interpolate',['linear'],['zoom'],14,7,17,11,19,15],
-    highlight:['interpolate',['linear'],['zoom'],14,1.5,17,2.5,19,3.5]
+    outline:['interpolate',['linear'],['zoom'],14,12,17,20,19,27],
+    main:['interpolate',['linear'],['zoom'],14,8,17,14,19,19],
+    highlight:['interpolate',['linear'],['zoom'],14,2,17,3.5,19,5]
   };
   const layers=[
     {id:'active-route-outline',type:'line',source:'active-route',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#101c5c','line-opacity':.88,'line-width':widths.outline}},
@@ -1263,6 +1276,39 @@ function addDriverRoute(map){
     {id:'active-route-highlight',type:'line',source:'active-route',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#66a4ff','line-opacity':.72,'line-width':widths.highlight}}
   ];
   for(const layer of layers)map.addLayer(layer,firstLabel);
+  map.addSource('maneuver-surface-arrow',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'maneuver-surface-line',type:'line',source:'maneuver-surface-arrow',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#f7d34d','line-opacity':.94,'line-width':['interpolate',['linear'],['zoom'],15,8,18,14,20,17]}},firstLabel);
+  map.addLayer({id:'maneuver-surface-symbol',type:'symbol',source:'maneuver-surface-arrow',layout:{'symbol-placement':'line-center','text-field':'➤','text-font':['Noto Sans Bold'],'text-size':['interpolate',['linear'],['zoom'],15,24,18,36,20,42],'text-rotation-alignment':'map','text-pitch-alignment':'map','text-keep-upright':false,'text-allow-overlap':true},paint:{'text-color':'#f4bf21','text-halo-color':'#795500','text-halo-width':2}},firstLabel);
+  updateManeuverSurfaceArrow(map);
+}
+
+function routePartByDistance(coords=[],maxMeters=65,fromEnd=false){
+  if(coords.length<2)return coords.slice();
+  const source=fromEnd?[...coords].reverse():coords;
+  const result=[source[0]];let distance=0;
+  for(let index=1;index<source.length;index++){
+    const previous=source[index-1],point=source[index];
+    distance+=haversine(previous[1],previous[0],point[1],point[0]);
+    result.push(point);
+    if(distance>=maxMeters)break;
+  }
+  return fromEnd?result.reverse():result;
+}
+
+function maneuverSurfaceArrowData(){
+  const empty={type:'FeatureCollection',features:[]};
+  const steps=state.route?.legs?.[0]?.steps||[],index=state.instructionStepIndex;
+  const step=steps[index],type=(step?.maneuver?.type||'').toLowerCase(),modifier=(step?.maneuver?.modifier||'').toLowerCase();
+  const turns=modifier.includes('left')||modifier.includes('right')||modifier.includes('uturn')||type.includes('ramp')||type==='fork'||type==='roundabout'||type==='rotary';
+  if(!step||!turns||!hasPosition()||distanceToStep(step)>190)return empty;
+  const incoming=routePartByDistance(steps[Math.max(0,index-1)]?.geometry?.coordinates||[],70,true);
+  const outgoing=routePartByDistance(step.geometry?.coordinates||[],80,false);
+  const coordinates=[...incoming,...outgoing].filter((point,pointIndex,all)=>pointIndex===0||point[0]!==all[pointIndex-1][0]||point[1]!==all[pointIndex-1][1]);
+  return coordinates.length>1?{type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{type:'LineString',coordinates}}]}:empty;
+}
+
+function updateManeuverSurfaceArrow(map=state.driverMap){
+  map?.getSource?.('maneuver-surface-arrow')?.setData(maneuverSurfaceArrowData());
 }
 
 function normalizedCourse(value){return ((Number(value)||0)%360+360)%360;}
@@ -1296,7 +1342,7 @@ function fallBackToLeafletDriver(){
 function initDriverMapLibre(){
   const element=document.querySelector('#map');
   if(!element||!hasPosition()){state.driverMapFallback=true;initLeafletDriveMap(true);return;}
-  const guide=routeGuidanceHeading(state.current,state.current.heading);
+  const guide=driverVehicleHeading(state.current,state.current.heading);
   state.driverCourse=normalizedCourse(guide);
   try{
     const map=new maplibregl.Map({container:element,style:DRIVER_STYLE,center:[state.current.lon,state.current.lat],zoom:driverZoom(),bearing:state.driverCourse,pitch:DRIVER_PITCH,interactive:false,attributionControl:false,antialias:false,fadeDuration:140,maxTileCacheZoomLevels:1,refreshExpiredTiles:false});
@@ -1335,7 +1381,7 @@ function initBrowseMap() {
 function centerMap(){
   if(!hasPosition())return notify('Noch kein gültiges GPS-Signal.');
   if(!isDriverMode()){state.map?.setView([state.current.lat,state.current.lon],state.map?.getZoom()||14);return;}
-  const guide=routeGuidanceHeading(state.current,state.current.heading),zoom=navigationZoom();
+  const guide=driverVehicleHeading(state.current,state.current.heading),zoom=navigationZoom();
   if(state.driverMap){updateDriverCamera(state.current,guide);return;}
   state.map?.setView(navigationCameraCenter(state.current,guide,zoom,state.map),zoom);
   applyDriveOrientation(guide);
@@ -1487,7 +1533,7 @@ function navigationCenter(position=state.current,heading=0,meters=115){
   return [lat,lon];
 }
 
-const NAVIGATION_ZOOM=17.25;
+const NAVIGATION_ZOOM=17.75;
 const NAVIGATION_ANCHOR_Y=.75;
 
 function navigationZoom(){ return NAVIGATION_ZOOM; }
@@ -1513,19 +1559,20 @@ function positionDriverMarker(){
 function routeGuidanceHeading(position=state.current,fallback=0){
   const coords=routeCoordinates();
   if(!hasPosition(position)||coords.length<2)return Number.isFinite(fallback)?fallback:0;
-  let nearest=0,best=Infinity;
-  for(let i=0;i<coords.length;i++){
-    const distance=haversine(position.lat,position.lon,coords[i][1],coords[i][0]);
-    if(distance<best){best=distance;nearest=i;}
+  let segment=0,best=Infinity;
+  for(let index=1;index<coords.length;index++){
+    const distance=pointSegmentDistance(position.lat,position.lon,coords[index-1][1],coords[index-1][0],coords[index][1],coords[index][0]);
+    if(distance<best){best=distance;segment=index-1;}
   }
-  let target=Math.min(coords.length-1,nearest+1),ahead=0;
-  while(target<coords.length){
-    ahead+=haversine(coords[target-1][1],coords[target-1][0],coords[target][1],coords[target][0]);
-    if(ahead>=110||target===coords.length-1)break;
-    target++;
-  }
-  const point=coords[target];
-  return point?bearingBetween(position.lat,position.lon,point[1],point[0]):fallback;
+  const from=coords[segment],to=coords[Math.min(coords.length-1,segment+1)];
+  return from&&to?bearingBetween(from[1],from[0],to[1],to[0]):fallback;
+}
+
+function driverVehicleHeading(position=state.current,fallback=0){
+  const speed=Math.max(0,Number(state.current.speed)||0),measured=Number(state.current.heading);
+  if(speed>=1.2&&Number.isFinite(measured))return normalizedCourse(measured);
+  if(Number.isFinite(state.driverCourse))return normalizedCourse(state.driverCourse);
+  return routeGuidanceHeading(position,fallback);
 }
 
 function leafletBearingForCourse(heading){ return (360-((heading%360)+360)%360)%360; }
@@ -1609,7 +1656,7 @@ function startGps() {
 
 function smoothVehicleMove(target,jump=0){
   const driver=isDriverMode();
-  const guide=routeGuidanceHeading(target,state.current.heading);
+  const guide=driverVehicleHeading(target,state.current.heading);
   if(driver&&state.driverMap){updateDriverCamera(target,guide,jump>220);return;}
   if(!state.userMarker)return;
   if(state.positionAnimation)cancelAnimationFrame(state.positionAnimation);
@@ -1640,6 +1687,7 @@ function updateStatusOnly(){
   document.querySelectorAll('[data-drive="arrival"]').forEach(el=>el.textContent=state.route?timeText(stats.arrival):'--:--');
   const remaining=document.querySelector('[data-drive="remaining"]');
   if(remaining)remaining.textContent=state.route?formatDistance(stats.distance):'—';
+  updateManeuverSurfaceArrow();
 }
 
 async function maybeReroute(){
@@ -1650,7 +1698,7 @@ async function maybeReroute(){
     if(isDriverMode()&&!state.arrived){state.arrived=true;state.navigationMode='overview';if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false);setTimeout(()=>go('summary'),0);}
     return;
   }
-  if(!state.hasMoved||state.rerouting||state.trafficCheckInProgress||Date.now()-state.lastReroute<20000)return;
+  if(!state.hasMoved||state.rerouting||state.trafficCheckInProgress||Date.now()-state.lastReroute<8000)return;
   let nearest=Infinity;
   const steps=state.route.legs?.[0]?.steps||[];
   const from=Math.max(0,state.routeStepIndex-2),to=Math.min(steps.length-1,state.routeStepIndex+12);
@@ -1668,6 +1716,8 @@ async function maybeReroute(){
   if(state.offRouteFixes<3)return;
   state.offRouteFixes=0;
   state.rerouting=true; state.lastReroute=Date.now(); speak('Die Route wird neu berechnet.');
+  const rerouteMessage=document.querySelector('.xl-status-message span');
+  if(rerouteMessage)rerouteMessage.textContent='Route wird neu berechnet…';
   try{await calculateRoute(false,true);if(state.screen==='drive')render();}catch{}
   finally{state.rerouting=false;}
 }
@@ -1688,7 +1738,8 @@ async function maybeCheckLiveTraffic(){
     if(requestToken!==state.trafficRouteToken||!state.destination)return;
     const newSignature=routeRoadSignature(candidate,0);
     const changed=oldSignature&&newSignature&&oldSignature!==newSignature&&(Math.abs(candidate.distance-oldDistance)>350||Math.abs((candidate.trafficDelay||0)-oldDelay)>60);
-    state.route=candidate;state.trafficStatus=`Live-Verkehr aktiv · ${formatTrafficDelay(candidate.trafficDelay)}`;resetRouteProgress();
+    const navigationMode=state.navigationMode;
+    state.route=candidate;state.trafficStatus=`Live-Verkehr aktiv · ${formatTrafficDelay(candidate.trafficDelay)}`;resetRouteProgress(navigationMode==='driving'?'driving':'overview');
     if(changed)speak('Die Verkehrslage hat sich geändert. Die Route wurde angepasst.');
     await refreshTrafficIncidents(false);
     if(state.screen==='drive')render();
@@ -1745,6 +1796,9 @@ function enableDriveDemo() {
 }
 
 window.handleClassicBack=handleSystemBack;
+document.addEventListener?.('contextmenu',event=>event.preventDefault());
+document.addEventListener?.('selectstart',event=>event.preventDefault());
+document.addEventListener?.('dragstart',event=>event.preventDefault());
 if('serviceWorker' in navigator && location.hostname !== 'app.local') window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
 enableDriveDemo();
 startGps();

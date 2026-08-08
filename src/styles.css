@@ -9,7 +9,7 @@
   --green: #67ae18;
 }
 
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input { font: inherit; }
 button { touch-action: manipulation; cursor: pointer; }
@@ -257,7 +257,10 @@ button { touch-action: manipulation; cursor: pointer; }
 .fixed-position-marker { position:absolute; z-index:445; left:50%; top:54%; width:34px; height:42px; transform:translate(-50%,-50%); pointer-events:none; filter:drop-shadow(0 3px 3px #102a45aa); }
 .fixed-position-marker svg { display:block; width:100%; height:100%; overflow:visible; }
 .chevron-outline { fill:#f8ffff; stroke:#123e58; stroke-width:3; stroke-linejoin:round; }.chevron-fill { fill:#1bd7df; }.chevron-core { fill:#168aa9; }
-.xl-map-control { position:absolute; z-index:447; right:8px; width:40px; height:40px; display:grid; place-items:center; padding:0 0 3px; border:2px solid #727b7b; border-radius:8px; background:linear-gradient(#f9faf7,#d5dbd7); color:#222; box-shadow:0 1px 3px #0007; font-size:32px; font-weight:700; line-height:1; }
+.xl-map-control { position:absolute; z-index:447; right:8px; width:40px; height:40px; display:flex; align-items:center; justify-content:center; padding:0; border:2px solid #727b7b; border-radius:8px; background:linear-gradient(#f9faf7,#d5dbd7); color:#222; box-shadow:0 1px 3px #0007; font-size:0; font-weight:700; line-height:1; }
+.xl-map-control::before { display:block; font-family:Arial,sans-serif; font-size:32px; font-weight:700; line-height:1; transform:translateY(-1px); }
+.xl-minus::before { content:"−"; transform:translateY(-3px); }
+.xl-plus::before { content:"+"; }
 .xl-minus { top:8px; }.xl-plus { bottom:84px; }
 .xl-quick { position:absolute; z-index:447; left:8px; top:8px; width:58px; height:58px; padding:2px; border:2px solid #6c7575; border-radius:8px; background:linear-gradient(#fbfcfa,#dce0dd); box-shadow:0 2px 4px #0008; }
 .xl-quick .classic-icon { width:100%; height:100%; filter:none; }
