@@ -1,5 +1,5 @@
 ﻿{
-    "version":  "2.9.5",
+    "version":  "2.9.6",
     "minimumShellVersion":  23,
     "files":  [
                   {
@@ -16,8 +16,8 @@
                   },
                   {
                       "path":  "src/styles.css",
-                      "sha256":  "f638414541e67a0c09e39f025e85768cd3909f7aa4906bb6524475b6a76dfdc4",
-                      "bytes":  28555,
+                      "sha256":  "87b10bc8a84f275b3860408a9268ec633afc165ef3a0292c661d634728b7f099",
+                      "bytes":  28559,
                       "url":  "src/styles.css"
                   },
                   {
@@ -51,5 +51,5 @@
                       "url":  "classic-navi.svg"
                   }
               ],
-    "signature":  "Js10gqALH2PrDCC6CPoCVFZ81HViLrR2k+/BVcYbRjA="
+    "signature":  "RZTPl3pmJDdV92XMEXaEY4R7z1O5Da/PYvF7Eh8IFWk="
 }
