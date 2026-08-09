@@ -258,9 +258,10 @@ function laneArrow(lane) {
 
 function renderJunctionView(step,distance,stats,speed) {
   const lanes=stepLanes(step);
+  const onRamp=(step?.maneuver?.type||'').toLowerCase().includes('on ramp');
   const destination=step.destinations||step.name||'Ausfahrt';
   const routeRef=step.ref||step.exits||'';
-  return `<div class="junction-view"><div class="junction-sky"></div><div class="junction-grass"></div><div class="junction-road"><i></i><i></i><i></i><span class="junction-route-arrow">➜</span></div><div class="junction-sign">${routeRef?`<small>${escapeHtml(routeRef)}</small>`:''}<strong>${escapeHtml(destination)}</strong><b>↓</b></div></div>
+  return `<div class="junction-view ${onRamp?'on-ramp':'off-ramp'}"><div class="junction-sky"></div><div class="junction-grass"></div><div class="junction-road"><i></i><i></i><i></i><span class="junction-route-arrow">${onRamp?'↖':'➜'}</span></div><div class="junction-sign">${routeRef?`<small>${escapeHtml(routeRef)}</small>`:''}<strong>${escapeHtml(destination)}</strong><b>↓</b></div></div>
     <div class="junction-status"><div class="junction-speed"><strong>${timeText()}</strong><span><b data-drive="speed">${speed}</b><small>km/h</small></span></div><div class="junction-lanes">${lanes.map(l=>`<span class="${l.valid===false?'invalid':'valid'}">${laneArrow(l)}</span>`).join('')}</div><button data-action="repeat"><span>${maneuverArrow(step)}</span><strong data-drive="distance">${formatDistance(distance)}</strong></button><div class="junction-arrival"><strong data-drive="arrival">${timeText(stats.arrival)}</strong><span>${formatDuration(stats.duration)}</span></div></div>`;
 }
 
@@ -1212,8 +1213,9 @@ function initLeafletDriveMap(driver=isDriverMode()) {
   state.map=initBaseMap('map',!driver,driver);
   state.routeLine=drawRoute(state.map,driver);
   if(!hasPosition()) { state.map.setView([51.1657,10.4515],6); return; }
-  const pos=[state.current.lat,state.current.lon];
   const guide=driverVehicleHeading(state.current,state.current.heading);
+  const initialPosition=driver?snappedDriverPosition(state.current,guide):state.current;
+  const pos=[initialPosition.lat,initialPosition.lon];
   const custom=L.divIcon({className:'',html:`<div class="position-marker-shell"><div class="position-marker" style="transform:rotate(${state.current.heading||guide}deg)"></div></div>`,iconSize:[30,40],iconAnchor:[15,32]});
   state.userMarker=L.marker(pos,{icon:custom,opacity:driver?0:1,interactive:false}).addTo(state.map);
   if(state.destination){
@@ -1227,7 +1229,7 @@ function initLeafletDriveMap(driver=isDriverMode()) {
     return;
   }
   const zoom=navigationZoom();
-  state.map.setView(navigationCameraCenter(state.current,guide,zoom,state.map),zoom);
+  state.map.setView(navigationCameraCenter(initialPosition,guide,zoom,state.map),zoom);
   applyDriveOrientation(guide,true);
   positionDriverMarker();
 }
@@ -1408,7 +1410,8 @@ function smoothedDriverCourse(heading,immediate=false){
 function updateDriverCamera(position=state.current,heading=0,immediate=false){
   const map=state.driverMap;
   if(!map||!hasPosition(position))return;
-  const camera={center:[position.lon,position.lat],bearing:smoothedDriverCourse(heading,immediate),pitch:DRIVER_PITCH,zoom:driverZoom(),padding:driverPadding(map)};
+  const cameraPosition=snappedDriverPosition(position,heading);
+  const camera={center:[cameraPosition.lon,cameraPosition.lat],bearing:smoothedDriverCourse(heading,immediate),pitch:DRIVER_PITCH,zoom:driverZoom(),padding:driverPadding(map)};
   state.cameraBearing=camera.bearing;
   if(immediate||!state.driverMapReady)map.jumpTo(camera);
   else map.easeTo({...camera,duration:680,easing:t=>t*t*(3-2*t),essential:true,noMoveStart:true});
@@ -1472,7 +1475,8 @@ function centerMap(){
   if(!isDriverMode()){state.map?.setView([state.current.lat,state.current.lon],state.map?.getZoom()||14);return;}
   const guide=driverVehicleHeading(state.current,state.current.heading),zoom=navigationZoom();
   if(state.driverMap){updateDriverCamera(state.current,guide);return;}
-  state.map?.setView(navigationCameraCenter(state.current,guide,zoom,state.map),zoom);
+  const displayPosition=snappedDriverPosition(state.current,guide);
+  state.map?.setView(navigationCameraCenter(displayPosition,guide,zoom,state.map),zoom);
   applyDriveOrientation(guide);
 }
 
@@ -1532,6 +1536,55 @@ function pointSegmentDistance(lat,lon,aLat,aLon,bLat,bLon){
   const dx=bx-ax,dy=by-ay,length=dx*dx+dy*dy;
   const t=length?Math.max(0,Math.min(1,-((ax*dx)+(ay*dy))/length)):0;
   return Math.hypot(ax+t*dx,ay+t*dy);
+}
+
+function projectedPointOnSegment(lat,lon,aLat,aLon,bLat,bLon){
+  const xScale=111320*Math.max(.2,Math.cos(lat*Math.PI/180)),yScale=110540;
+  const ax=(aLon-lon)*xScale,ay=(aLat-lat)*yScale,bx=(bLon-lon)*xScale,by=(bLat-lat)*yScale;
+  const dx=bx-ax,dy=by-ay,length=dx*dx+dy*dy;
+  const t=length?Math.max(0,Math.min(1,-((ax*dx)+(ay*dy))/length)):0;
+  const projectedX=ax+t*dx,projectedY=ay+t*dy;
+  return {
+    lat:lat+projectedY/yScale,
+    lon:lon+projectedX/xScale,
+    distance:Math.hypot(projectedX,projectedY),
+    bearing:bearingBetween(aLat,aLon,bLat,bLon)
+  };
+}
+
+function driverRouteSegments(){
+  const steps=state.route?.legs?.[0]?.steps||[];
+  if(!steps.length)return routeCoordinates();
+  const from=Math.max(0,state.routeStepIndex-1),to=Math.min(steps.length-1,state.routeStepIndex+3),coordinates=[];
+  for(let index=from;index<=to;index++){
+    for(const point of steps[index]?.geometry?.coordinates||[]){
+      const previous=coordinates.at(-1);
+      if(!previous||previous[0]!==point[0]||previous[1]!==point[1])coordinates.push(point);
+    }
+  }
+  return coordinates.length>1?coordinates:routeCoordinates();
+}
+
+function snappedDriverPosition(position=state.current,heading=state.current.heading){
+  if(!isDriverMode()||!state.route||!hasPosition(position))return position;
+  const coordinates=driverRouteSegments();
+  if(coordinates.length<2)return position;
+  const moving=Math.max(0,Number(state.current.speed)||0)>=1.2;
+  let best=null,bestScore=Infinity;
+  for(let index=1;index<coordinates.length;index++){
+    const from=coordinates[index-1],to=coordinates[index];
+    const candidate=projectedPointOnSegment(position.lat,position.lon,from[1],from[0],to[1],to[0]);
+    const angle=moving?Math.abs(((candidate.bearing-normalizedCourse(heading)+540)%360)-180):0;
+    // Vor einer Kreuzung gewinnt weiterhin die Spur, in deren Richtung das Auto
+    // tatsächlich fährt. So springt der Pfeil nicht vorzeitig auf den Abzweig.
+    const directionPenalty=moving?Math.min(55,angle)*.7:0;
+    const score=candidate.distance+directionPenalty;
+    if(score<bestScore){bestScore=score;best=candidate;}
+  }
+  const accuracy=Math.max(4,Number(position.accuracy)||20);
+  const snapLimit=Math.max(16,Math.min(48,accuracy*1.6));
+  if(!best||best.distance>snapLimit)return position;
+  return {...position,lat:best.lat,lon:best.lon,routeSnapDistance:best.distance};
 }
 function distanceToStep(step){const [lon,lat]=step.maneuver.location;return haversine(state.current.lat,state.current.lon,lat,lon);}
 function haversine(a,b,c,d){const R=6371000,p=Math.PI/180,x=(c-a)*p,y=(d-b)*p;const q=Math.sin(x/2)**2+Math.cos(a*p)*Math.cos(c*p)*Math.sin(y/2)**2;return 2*R*Math.asin(Math.sqrt(q));}
@@ -1761,21 +1814,22 @@ function startGps() {
 function smoothVehicleMove(target,jump=0){
   const driver=isDriverMode();
   const guide=driverVehicleHeading(target,state.current.heading);
-  if(driver&&state.driverMap){updateDriverCamera(target,guide,jump>220);return;}
+  const displayTarget=driver?snappedDriverPosition(target,guide):target;
+  if(driver&&state.driverMap){updateDriverCamera(displayTarget,guide,jump>220);return;}
   if(!state.userMarker)return;
   if(state.positionAnimation)cancelAnimationFrame(state.positionAnimation);
   const from=state.userMarker.getLatLng();
   const markerElement=state.userMarker.getElement?.()?.querySelector('.position-marker');
   if(markerElement)markerElement.style.transform=`rotate(${state.current.heading||guide}deg)`;
   const zoom=navigationZoom();
-  const center=driver?navigationCameraCenter(target,guide,zoom,state.map):[target.lat,target.lon];
+  const center=driver?navigationCameraCenter(displayTarget,guide,zoom,state.map):[target.lat,target.lon];
   if(driver)applyDriveOrientation(guide);
-  if(jump>220){state.userMarker.setLatLng(target);state.map?.setView(center,driver?zoom:state.map.getZoom(),{animate:false});return;}
+  if(jump>220){state.userMarker.setLatLng(displayTarget);state.map?.setView(center,driver?zoom:state.map.getZoom(),{animate:false});return;}
   const started=performance.now(),duration=650;
   const frame=now=>{
     if(!state.userMarker)return;
     const t=Math.min(1,(now-started)/duration),eased=1-(1-t)*(1-t);
-    state.userMarker.setLatLng([from.lat+(target.lat-from.lat)*eased,from.lng+(target.lon-from.lng)*eased]);
+    state.userMarker.setLatLng([from.lat+(displayTarget.lat-from.lat)*eased,from.lng+(displayTarget.lon-from.lng)*eased]);
     if(t<1)state.positionAnimation=requestAnimationFrame(frame);else state.positionAnimation=0;
   };
   state.positionAnimation=requestAnimationFrame(frame);
@@ -1878,14 +1932,29 @@ function escapeHtml(value=''){return String(value).replace(/[&<>'"]/g,c=>({'&':'
 
 function enableDriveDemo() {
   const demo=new URLSearchParams(location.search).get('demo');
-  if(demo!=='route'&&demo!=='junction'&&demo!=='overview'&&demo!=='turn')return;
+  if(!['route','junction','exit','onramp','overview','turn'].includes(demo))return;
   const turning=demo==='turn';
-  const motorway=demo==='junction';
+  const motorwayExit=demo==='junction'||demo==='exit',motorwayOn=demo==='onramp',motorway=motorwayExit||motorwayOn;
   const overview=demo==='overview';
   state.screen=overview?'summary':'drive';
   const start=motorway?{lat:48.7758,lon:9.1829}:{lat:51.588507,lon:7.314882};
   const finish=motorway?{lat:48.86,lon:9.32}:{lat:51.5730,lon:7.2990};
-  if(turning){
+  if(motorway){
+    const before={lat:48.77440,lon:9.18290},current={lat:48.77500,lon:9.18290},junction={lat:48.77608,lon:9.18290};
+    const after=motorwayExit?{lat:48.77655,lon:9.18435}:{lat:48.77690,lon:9.18290};
+    const type=motorwayExit?'off ramp':'on ramp',modifier=motorwayExit?'right':'slight right';
+    const ref=motorwayExit?'A 2 · Ausfahrt 11':'A 42',destinations=motorwayExit?'Hannover-Zentrum':'Dortmund';
+    const lanes=motorwayExit
+      ?[{indications:['straight'],valid:false},{indications:['straight'],valid:false},{indications:['slight right'],valid:true},{indications:['right'],valid:true}]
+      :[{indications:['slight right'],valid:true},{indications:['straight'],valid:true},{indications:['right'],valid:false}];
+    state.demoMode=true;state.navigationMode='driving';state.screen='drive';state.hasMoved=true;state.hasLiveFix=true;state.lastFixTime=Date.now();state.current={...current,accuracy:4,speed:25,heading:0};
+    state.destination={...after,display_name:destinations};
+    state.route={distance:1250,duration:75,geometry:{coordinates:[[before.lon,before.lat],[junction.lon,junction.lat],[after.lon,after.lat]]},legs:[{steps:[
+      {distance:180,duration:12,name:motorwayExit?'A 2':'Auffahrt A 42',ref:motorwayExit?'A 2':'',maneuver:{type:'depart',modifier:'straight',location:[before.lon,before.lat]},geometry:{coordinates:[[before.lon,before.lat],[junction.lon,junction.lat]]}},
+      {distance:1070,duration:63,name:ref,ref,destinations,exits:motorwayExit?'11':'',maneuver:{type,modifier,location:[junction.lon,junction.lat]},geometry:{coordinates:[[junction.lon,junction.lat],[after.lon,after.lat]]},intersections:[{lanes}]}
+    ]}]};
+    state.routeStepIndex=0;state.instructionStepIndex=1;
+  }else if(turning){
     const before={lat:51.58810,lon:7.31420},current={lat:51.58842,lon:7.31420},corner={lat:51.58882,lon:7.31420},after={lat:51.58882,lon:7.31545};
     state.demoMode=true;state.navigationMode='driving';state.screen='drive';state.hasMoved=true;state.hasLiveFix=true;state.lastFixTime=Date.now();state.current={...current,accuracy:4,speed:10,heading:0};
     state.destination={...after,display_name:'Testziel nach der Kreuzung'};

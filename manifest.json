@@ -1,5 +1,5 @@
 ﻿{
-    "version":  "2.10.7",
+    "version":  "2.10.8",
     "minimumShellVersion":  23,
     "files":  [
                   {
@@ -10,14 +10,14 @@
                   },
                   {
                       "path":  "src/app.js",
-                      "sha256":  "d96814aff203f3d99693db32cc008dc0cea8acaa8134edc6895fa535a87c2ef1",
-                      "bytes":  124637,
+                      "sha256":  "3c44e55a5f81c03026927a326a46c319c3a89d83a3eb1f5df05efc02b500807d",
+                      "bytes":  129311,
                       "url":  "src/app.js"
                   },
                   {
                       "path":  "src/styles.css",
-                      "sha256":  "89d16e9278eb220f93dcb317d8fa3053a321e5c2e1d6beb18b872fbd552cb4cd",
-                      "bytes":  29483,
+                      "sha256":  "69e7406628a6a69b7234334436e579221b305fe5fef00e5a93c7a042ad8054c3",
+                      "bytes":  30104,
                       "url":  "src/styles.css"
                   },
                   {
@@ -51,5 +51,5 @@
                       "url":  "classic-navi.svg"
                   }
               ],
-    "signature":  "/Zek6+npamTyoy1PZ+bkx9nAiP6C1Lp7bLJ3geWtjMs="
+    "signature":  "kyv/Safcs2S+to8kk44aSXiAHxdWjMyVw87K9PbfQLc="
 }
