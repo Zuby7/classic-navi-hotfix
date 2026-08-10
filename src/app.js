@@ -63,7 +63,11 @@ const state = {
   junctionTimer: 0,
   positionAnimation: 0,
   offRouteFixes: 0,
+  wrongWayFixes: 0,
   announcedLevels: [],
+  compoundCurrentStep: -1,
+  compoundNextStep: -1,
+  compoundAnnouncedAt: 0,
   lastSpoken: '',
   rerouting: false,
   lastReroute: 0,
@@ -986,13 +990,31 @@ function rememberSearch(destination){
   save();
 }
 
+async function fetchWithTimeout(url,options={},timeout=7000){
+  const controller=typeof AbortController==='function'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),timeout):0;
+  try{return await fetch(url,{...options,signal:controller?.signal||options.signal});}
+  finally{if(timer)clearTimeout(timer);}
+}
+
+async function fetchJsonWithTimeout(url,timeout=7000){
+  const response=await fetchWithTimeout(url,{},timeout);
+  if(!response.ok)throw new Error(`routing-${response.status}`);
+  const data=await response.json();
+  if(data?.code&&data.code!=='Ok')throw new Error(`routing-${data.code}`);
+  return data;
+}
+
 async function calculateRoute(alternative=false,silent=false) {
   if (!state.destination) return;
   if(!hasPosition()||!state.hasLiveFix) throw new Error('gps');
   const keepDriverMode=silent&&isDriverMode();
   if(!silent){state.loading=true; state.notice=alternative?'Alternative wird berechnet…':'Route wird berechnet…'; render();}
   let route=null;
-  if(canUseTomTom()) {
+  if(silent){
+    route=await calculateFastReroute(alternative);
+    state.trafficStatus=route.provider==='tomtom'?`Live-Verkehr aktiv · ${formatTrafficDelay(route.trafficDelay)}`:'Schnelle Neuberechnung · OSRM-Notbetrieb';
+  } else if(canUseTomTom()) {
     try {
       route=await calculateTomTomRoute(alternative);
       state.trafficStatus=`Live-Verkehr aktiv · ${formatTrafficDelay(route.trafficDelay)}`;
@@ -1007,10 +1029,40 @@ async function calculateRoute(alternative=false,silent=false) {
   save();
 }
 
+async function calculateFastReroute(alternative=false){
+  const tomtom=canUseTomTom()?calculateTomTomRoute(alternative).catch(error=>{handleTomTomError(error);return null;}):Promise.resolve(null);
+  const osrm=calculateOsrmRoute(alternative).catch(()=>null);
+  // TomTom erhält kurz Vorrang für Live-Verkehr. Antwortet es unterwegs nicht
+  // schnell, wird die bereits parallel laufende kostenlose Route verwendet.
+  const quickTomTom=await Promise.race([tomtom,new Promise(resolve=>setTimeout(()=>resolve(null),1600))]);
+  if(quickTomTom)return quickTomTom;
+  const quickOsrm=await osrm;
+  if(quickOsrm)return quickOsrm;
+  const lateTomTom=await tomtom;
+  if(lateTomTom)return lateTomTom;
+  throw new Error('reroute-failed');
+}
+
 async function calculateOsrmRoute(alternative=false) {
   const start=`${state.current.lon},${state.current.lat}`, end=`${state.destination.lon},${state.destination.lat}`;
-  const url=`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=simplified&geometries=geojson&steps=true&alternatives=${alternative?'true':'false'}`;
-  const data=await fetch(url).then(r=>{if(!r.ok)throw new Error();return r.json();});
+  const base=`https://router.project-osrm.org/route/v1/driving/${start};${end}`;
+  const params=new URLSearchParams({overview:'simplified',geometries:'geojson',steps:'true',alternatives:alternative?'true':'false',continue_straight:'true'});
+  const moving=Math.max(0,Number(state.current.speed)||0)>=1.2&&Number.isFinite(state.current.heading);
+  if(moving){
+    const radius=Math.max(15,Math.min(60,Math.round((state.current.accuracy||10)*1.8)));
+    params.set('bearings',`${Math.round(normalizedCourse(state.current.heading))},55;`);
+    params.set('radiuses',`${radius};unlimited`);
+  }
+  let data;
+  try{data=await fetchJsonWithTimeout(`${base}?${params}`,7000);}
+  catch(error){
+    if(!moving)throw error;
+    // Bei sehr ungenauem GPS nochmals mit breiterem Richtungskorridor versuchen,
+    // aber weiterhin keine sofortige Kehrtwende am Start zulassen.
+    params.set('bearings',`${Math.round(normalizedCourse(state.current.heading))},110;`);
+    params.delete('radiuses');
+    data=await fetchJsonWithTimeout(`${base}?${params}`,7000);
+  }
   if(data.code!=='Ok'||!data.routes?.length) throw new Error();
   const route=alternative&&data.routes[1]?data.routes[1]:data.routes[0];
   route.provider='osrm';route.trafficDelay=0;route.fetchedAt=Date.now();
@@ -1023,8 +1075,9 @@ function canUseTomTom(){return TOMTOM_API_KEY.length>=8&&Date.now()>=state.traff
 async function calculateTomTomRoute(alternative=false) {
   const points=`${state.current.lat},${state.current.lon}:${state.destination.lat},${state.destination.lon}`;
   const params=new URLSearchParams({key:state.tomtomKey,traffic:'true',travelMode:'car',routeType:'fastest',routeRepresentation:'polyline',instructionsType:'text',language:'de-DE',computeTravelTimeFor:'all',maxAlternatives:alternative?'1':'0'});
+  if(Math.max(0,Number(state.current.speed)||0)>=1.2&&Number.isFinite(state.current.heading))params.set('vehicleHeading',String(Math.round(normalizedCourse(state.current.heading))));
   params.append('sectionType','traffic');params.append('sectionType','lanes');
-  const response=await fetch(`https://api.tomtom.com/routing/1/calculateRoute/${points}/json?${params}`);
+  const response=await fetchWithTimeout(`https://api.tomtom.com/routing/1/calculateRoute/${points}/json?${params}`,{},6500);
   if(!response.ok){const error=new Error(`tomtom-${response.status}`);error.status=response.status;throw error;}
   const data=await response.json();
   if(!data.routes?.length)throw new Error('tomtom-empty');
@@ -1159,10 +1212,10 @@ function handleTomTomError(error){
 
 function resetRouteProgress(navigationMode='overview'){
   if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;}
-  state.lastInstructionIndex=-1; state.announcedLevels=[]; state.routeStepIndex=0; state.routeProgressReady=false; state.instructionStepIndex=0; state.junctionStepKey=-1; state.junctionShownAt=0; state.offRouteFixes=0; state.navigationMode=navigationMode;state.arrived=false;state.loading=false; state.notice=''; save();
+  state.lastInstructionIndex=-1; state.announcedLevels=[]; state.compoundCurrentStep=-1;state.compoundNextStep=-1;state.compoundAnnouncedAt=0; state.routeStepIndex=0; state.routeProgressReady=false; state.instructionStepIndex=0; state.junctionStepKey=-1; state.junctionShownAt=0; state.offRouteFixes=0;state.wrongWayFixes=0; state.navigationMode=navigationMode;state.arrived=false;state.loading=false; state.notice=''; save();
 }
 
-function clearRoute(targetScreen='drive',announce=true) { state.trafficRouteToken++;state.route=null; state.destination=null;state.navigationMode='overview';state.arrived=false; state.trafficIncidents=[];state.announcedIncidentIds=[];state.lastInstructionIndex=-1; state.announcedLevels=[]; state.routeStepIndex=0; state.routeProgressReady=false; state.junctionStepKey=-1; state.offRouteFixes=0; if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;} if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false); if(announce)speak('Route gelöscht.'); go(targetScreen); }
+function clearRoute(targetScreen='drive',announce=true) { state.trafficRouteToken++;state.route=null; state.destination=null;state.navigationMode='overview';state.arrived=false; state.trafficIncidents=[];state.announcedIncidentIds=[];state.lastInstructionIndex=-1; state.announcedLevels=[];state.compoundCurrentStep=-1;state.compoundNextStep=-1;state.compoundAnnouncedAt=0; state.routeStepIndex=0; state.routeProgressReady=false; state.junctionStepKey=-1; state.offRouteFixes=0;state.wrongWayFixes=0; if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;} if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false); if(announce)speak('Route gelöscht.'); go(targetScreen); }
 function beginSetHome() { resetAddress(); state.addressMode='streetNumber'; state.wizardStep='city'; localStorage.setItem('setting-home','true'); go('wizard'); }
 
 function initBaseMap(elementId, interactive=true,driveMode=false) {
@@ -1505,19 +1558,46 @@ function currentStep() {
 
 function announceInstruction(step,distance){
   if((!state.hasMoved&&!state.demoMode)||!step)return;
+  const steps=state.route?.legs?.[0]?.steps||[],stepIndex=state.instructionStepIndex,nextStep=steps[stepIndex+1];
+  const motorway=isMotorwayGuidanceStep(step)||isMotorwayGuidanceStep(nextStep);
+  const chained=!motorway&&isActionableManeuver(nextStep)&&(step.distance||Infinity)<=220;
+  const wasChained=state.compoundNextStep===stepIndex;
   let level='',prefix='';
   const speed=Math.max(0,state.current.speed||0);
   const nowDistance=Math.max(45,Math.min(110,speed*3.5));
+  if(wasChained&&distance>nowDistance)return;
   if(distance<=nowDistance){level='jetzt';prefix='Jetzt. ';}
+  else if(chained&&distance<=260){level='kette';prefix=distance<=150?'In einhundert Metern. ':'In zweihundert Metern. ';}
   else if(distance<=300){level='300';prefix='In dreihundert Metern. ';}
   else if(distance<=650){level='500';prefix='In fünfhundert Metern. ';}
   else if(distance<=1200){level='1000';prefix='In einem Kilometer. ';}
   else if(speed>22&&distance<=2200){level='2000';prefix='In zwei Kilometern. ';}
   if(!level||state.announcedLevels.includes(level))return;
+  // Wurde die Kombination erst kurz zuvor angesagt, muss das erste Manöver
+  // nicht wenige Sekunden später nochmals gesprochen werden.
+  if(chained&&level==='jetzt'&&state.compoundCurrentStep===stepIndex&&Date.now()-state.compoundAnnouncedAt<18000){state.announcedLevels.push(level);return;}
   state.announcedLevels.push(level);
   const type=(step.maneuver?.type||'').toLowerCase();
   if(type==='arrive')speak(`${level==='jetzt'?'':prefix}${arrivalText(step,level==='jetzt')}`);
-  else speak(prefix+instructionText(step));
+  else if(chained){
+    state.compoundCurrentStep=stepIndex;state.compoundNextStep=stepIndex+1;state.compoundAnnouncedAt=Date.now();
+    speak(`${prefix}${instructionText(step)} Danach ${lowerInstruction(instructionText(nextStep))}`);
+  } else speak(prefix+instructionText(step));
+}
+
+function isActionableManeuver(step){
+  const type=(step?.maneuver?.type||'').toLowerCase();
+  return Boolean(step)&&!['','depart','arrive','notification','continue','new name'].includes(type);
+}
+
+function isMotorwayGuidanceStep(step){
+  const type=(step?.maneuver?.type||'').toLowerCase(),road=`${step?.ref||''} ${step?.name||''}`;
+  return /\bA\s*\d+\b/i.test(road)||type.includes('ramp')||type==='merge'||type==='fork';
+}
+
+function lowerInstruction(text=''){
+  const clean=String(text).trim().replace(/[.!?]+$/,'');
+  return clean?clean[0].toLowerCase()+clean.slice(1)+'.':'';
 }
 
 function distanceToStepGeometry(step){
@@ -1856,23 +1936,37 @@ async function maybeReroute(){
     if(isDriverMode()&&!state.arrived){state.arrived=true;state.navigationMode='overview';if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false);setTimeout(()=>go('summary'),0);}
     return;
   }
-  if(!state.hasMoved||state.rerouting||state.trafficCheckInProgress||Date.now()-state.lastReroute<8000)return;
-  let nearest=Infinity;
+  if(!state.hasMoved||state.rerouting||Date.now()-state.lastReroute<5000)return;
+  let nearest=Infinity,headingDifference=180;
   const steps=state.route.legs?.[0]?.steps||[];
   const from=Math.max(0,state.routeStepIndex-2),to=Math.min(steps.length-1,state.routeStepIndex+12);
   for(let stepIndex=from;stepIndex<=to;stepIndex++){
     const coords=steps[stepIndex]?.geometry?.coordinates||[];
-    for(let i=1;i<coords.length;i++)nearest=Math.min(nearest,pointSegmentDistance(state.current.lat,state.current.lon,coords[i-1][1],coords[i-1][0],coords[i][1],coords[i][0]));
+    for(let i=1;i<coords.length;i++){
+      const candidate=projectedPointOnSegment(state.current.lat,state.current.lon,coords[i-1][1],coords[i-1][0],coords[i][1],coords[i][0]);
+      const difference=Math.abs(((candidate.bearing-normalizedCourse(state.current.heading)+540)%360)-180);
+      if(candidate.distance<nearest-8){nearest=candidate.distance;headingDifference=difference;}
+      else if(candidate.distance<=nearest+8&&difference<headingDifference)headingDifference=difference;
+    }
   }
   if(!Number.isFinite(nearest)){
     const coords=state.route.geometry.coordinates;
-    for(let i=1;i<coords.length;i++)nearest=Math.min(nearest,pointSegmentDistance(state.current.lat,state.current.lon,coords[i-1][1],coords[i-1][0],coords[i][1],coords[i][0]));
+    for(let i=1;i<coords.length;i++){
+      const candidate=projectedPointOnSegment(state.current.lat,state.current.lon,coords[i-1][1],coords[i-1][0],coords[i][1],coords[i][0]);
+      if(candidate.distance<nearest){nearest=candidate.distance;headingDifference=Math.abs(((candidate.bearing-normalizedCourse(state.current.heading)+540)%360)-180);}
+    }
   }
-  const tolerance=Math.max(70,(state.current.accuracy||0)*1.5);
-  if(nearest<tolerance){state.offRouteFixes=0;return;}
+  const tolerance=Math.max(18,Math.min(48,(state.current.accuracy||10)*1.5));
+  const wrongWay=state.current.speed>=2.2&&nearest<tolerance*1.35&&headingDifference>115;
+  if(nearest<tolerance&&!wrongWay){state.offRouteFixes=0;state.wrongWayFixes=0;return;}
+  state.wrongWayFixes=wrongWay?state.wrongWayFixes+1:0;
   state.offRouteFixes++;
-  if(state.offRouteFixes<3)return;
-  state.offRouteFixes=0;
+  const requiredFixes=wrongWay||nearest>tolerance*1.8?2:3;
+  if(state.offRouteFixes<requiredFixes)return;
+  state.offRouteFixes=0;state.wrongWayFixes=0;
+  // Eine parallele Verkehrsprüfung darf die dringende Neuberechnung weder
+  // blockieren noch später mit einem veralteten Ergebnis überschreiben.
+  state.trafficRouteToken++;
   state.rerouting=true; state.lastReroute=Date.now(); speak('Die Route wird neu berechnet.');
   const rerouteMessage=document.querySelector('.xl-status-message span');
   if(rerouteMessage)rerouteMessage.textContent='Route wird neu berechnet…';
