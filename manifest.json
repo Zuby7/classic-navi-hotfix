@@ -10,7 +10,7 @@
                   },
                   {
                       "path":  "src/app.js",
-                      "sha256":  "08371365b7d6153f966984a3bf1bc3f31bdd29ffd69b3dc4e7accd7db5f36f89",
+                      "sha256":  "3a47c2054e12575f0540f58366ee472322e3bdeee84e6b1eb4a411d9aaa1e226",
                       "bytes":  145820,
                       "url":  "src/app.js"
                   },
@@ -51,5 +51,5 @@
                       "url":  "classic-navi.svg"
                   }
               ],
-    "signature":  "fVX11UeCLw1d2vEJ/VQ5ZAHElWgUinwH+7xoBjc94TU="
+    "signature":  "RKnA7Oo2dfX6LA8MQNsysPCkK0ZCt+3jIUW24lcohdM="
 }

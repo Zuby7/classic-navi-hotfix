@@ -560,7 +560,7 @@ async function act(action) {
       readOfflineStatus();
       if(state.offline.ready)notify('NRW ist vollständig offline installiert. Karte, Adressen und Neuberechnung funktionieren ohne Internet.');
       else if(state.offline.downloading)notify(`NRW-Offlinedaten werden geladen: ${state.offline.file||''} ${state.offline.percent||0} %. Bitte WLAN eingeschaltet lassen.`);
-      else {window.AndroidNavi?.downloadNrwOffline?.();state.offline.downloading=true;render();notify('Der einmalige NRW-Download ist etwa 270 MB groß und startet nur im WLAN. Bitte WLAN eingeschaltet lassen.');}
+      else {window.AndroidNavi?.downloadNrwOffline?.();state.offline.downloading=true;render();notify('Der einmalige NRW-Download ist etwa 282 MB groß und startet nur im WLAN. Bitte WLAN eingeschaltet lassen.');}
       break;
     case 'mapCorrections': notify('Kartenkorrekturen werden über OpenStreetMap aktuell gehalten.'); break;
     case 'factoryReset': if(confirm('Alle Heimat-, Favoriten- und Verlaufsdaten löschen?')){localStorage.clear();location.reload();} break;
