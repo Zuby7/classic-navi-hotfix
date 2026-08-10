@@ -83,6 +83,27 @@ const state = {
   incidentCheckInProgress: false,
   lastIncidentCheck: 0,
   incidentBlockedUntil: Number(localStorage.getItem('classic-incidents-blocked-until') || 0),
+  offline: {ready:false,routing:false,map:false,search:false,downloading:false,percent:0,file:'',error:''},
+};
+
+function readOfflineStatus(){
+  try{state.offline={...state.offline,...JSON.parse(window.AndroidNavi?.offlineStatus?.()||'{}')};}catch{}
+  return state.offline;
+}
+
+function offlineCovers(point){
+  if(!point||!Number.isFinite(+point.lat)||!Number.isFinite(+point.lon))return false;
+  try{return Boolean(window.AndroidNavi?.offlineCovers?.(+point.lat,+point.lon));}catch{return false;}
+}
+
+function offlineSearchItems(kind,query='',city=''){
+  if(!readOfflineStatus().search)return [];
+  try{return JSON.parse(window.AndroidNavi?.offlineSearch?.(kind,query,city,12)||'[]');}catch{return [];}
+}
+
+window.onNrwOfflineProgress=(json)=>{
+  try{state.offline={...state.offline,...JSON.parse(json||'{}')};}catch{}
+  if(state.screen==='settings3')render();
 };
 
 // Alte, vom Fahrer eingetragene Schlüssel und Sperrstände der Vorversion
@@ -392,12 +413,14 @@ function renderSettings2() {
 }
 
 function renderSettings3() {
+  const offline=readOfflineStatus();
+  const offlineLabel=offline.ready?'NRW offline bereit':offline.downloading?`NRW wird geladen ${offline.percent||0}%`:'NRW offline installieren';
   return `<div class="panel-screen">${screenHeader('Optionen','3 von 3')}<div class="menu-grid classic-page-grid">
     ${menuButton('clockInfo','◷','Uhr einstellen','gray')}
     ${menuButton('units','km','Einheiten','green')}
     ${menuButton('statusInfo','▤','Statusleisten- Einstellungen','gray')}
     ${menuButton('mapInfo','▤','Karten- informationen','green')}
-    ${menuButton('factoryReset','↶','Standard wiederherstellen','orange')}
+    ${menuButton('offlineNrw','NRW',offlineLabel,offline.ready?'green':'orange')}
     ${pageArrow('settings')}
   </div></div><div class="bottom-bar menu-finish"><button class="bottom-button" data-action="settingsPage2">◀</button><button class="bottom-button" data-action="drive">Fertig</button></div>`;
 }
@@ -533,6 +556,12 @@ async function act(action) {
     case 'units': notify('Einheiten: Kilometer und Meter'); break;
     case 'statusInfo': notify('Statusleiste zeigt Geschwindigkeit, Abbiegehinweis, Entfernung und Ankunft.'); break;
     case 'mapInfo': notify('Karte: aktuelle OpenStreetMap-Onlinekarte'); break;
+    case 'offlineNrw':
+      readOfflineStatus();
+      if(state.offline.ready)notify('NRW ist vollständig offline installiert. Karte, Adressen und Neuberechnung funktionieren ohne Internet.');
+      else if(state.offline.downloading)notify(`NRW-Offlinedaten werden geladen: ${state.offline.file||''} ${state.offline.percent||0} %. Bitte WLAN eingeschaltet lassen.`);
+      else {window.AndroidNavi?.downloadNrwOffline?.();state.offline.downloading=true;render();notify('Der einmalige NRW-Download ist etwa 1,1 GB groß. Bitte WLAN eingeschaltet lassen.');}
+      break;
     case 'mapCorrections': notify('Kartenkorrekturen werden über OpenStreetMap aktuell gehalten.'); break;
     case 'factoryReset': if(confirm('Alle Heimat-, Favoriten- und Verlaufsdaten löschen?')){localStorage.clear();location.reload();} break;
     case 'repeat': state.lastSpoken ? speak(state.lastSpoken,true) : speak('Keine Routenanweisung verfügbar.',true); break;
@@ -684,12 +713,15 @@ async function loadSuggestions(requestId=++state.suggestionRequestId){
   const bias=state.cityContext?`&lat=${state.cityContext.lat}&lon=${state.cityContext.lon}`:hasPosition()?`&lat=${state.current.lat}&lon=${state.current.lon}`:'';
   const controller=typeof AbortController==='function'?new AbortController():{signal:undefined,abort(){}};
   state.suggestionAbortController=controller;
-  const [tomtomResult,photonResult]=await Promise.allSettled([
+  const offline=offlineSearchItems(step==='city'?'city':'street',value,state.address.city).map(item=>({
+    ...item,label:item.display_name,properties:{source:'offline',name:item.street||item.city,street:item.street||'',housenumber:item.number||'',postcode:item.postcode||'',city:item.city||'',town:item.city||'',type:step==='city'?'city':'street'}
+  }));
+  const [tomtomResult,photonResult]=navigator.onLine!==false?await Promise.allSettled([
     tomTomPlacesSuggest(value,step,{signal:controller.signal}),
     fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&lang=de&limit=5${bias}`,{signal:controller.signal})
       .then(r=>{if(!r.ok)throw new Error(`photon-${r.status}`);return r.json();})
       .then(data=>(data.features||[]).filter(step==='city'?isCityFeature:isStreetFeature).map(photonItem)),
-  ]);
+  ]):[{status:'rejected'},{status:'rejected'}];
   if(requestId!==state.suggestionRequestId||state.wizardStep!==step||wizardValue().trim()!==value)return;
   state.suggestionAbortController=null;
   const recent=recentAddressSuggestions(value,step);
@@ -698,7 +730,7 @@ async function loadSuggestions(requestId=++state.suggestionRequestId){
     ...(photonResult.status==='fulfilled'?photonResult.value:[]),
   ];
   const suggestions=[],seen=new Set();
-  for(const item of [...recent,...online]){
+  for(const item of [...recent,...offline,...online]){
     const identity=normalizeSearch(item.properties?.street||item.properties?.name||item.display_name);
     if(!identity||seen.has(identity))continue;
     seen.add(identity);suggestions.push(item);
@@ -931,8 +963,11 @@ async function geocodeAddress() {
   state.loading=true; state.notice='Adresse wird gesucht…'; render();
   const q = `${state.address.street} ${state.address.number}, ${state.address.city || state.address.postcode}, Deutschland`;
   try {
-    let found=(await tomTomStructuredAddress({streetName:state.address.street,streetNumber:state.address.number,municipality:state.address.city,postalCode:state.address.postcode},1))[0];
-    if(!found){
+    const localMatches=offlineSearchItems('address',`${state.address.street}\u001f${state.address.number}`,state.address.city);
+    let found=localMatches.find(item=>normalizeSearch(item.street)===normalizeSearch(state.address.street)&&String(item.number||'').toLowerCase()===String(state.address.number||'').trim().toLowerCase());
+    if(found)found={...found,display_name:`${found.street} ${found.number}, ${[found.postcode,found.city].filter(Boolean).join(' ')}`,properties:{source:'offline',street:found.street,housenumber:found.number,postcode:found.postcode,city:found.city}};
+    if(!found&&navigator.onLine!==false)found=(await tomTomStructuredAddress({streetName:state.address.street,streetNumber:state.address.number,municipality:state.address.city,postalCode:state.address.postcode},1))[0];
+    if(!found&&navigator.onLine!==false){
       const bias=state.cityContext?`&lat=${state.cityContext.lat}&lon=${state.cityContext.lon}`:'';
       const result=await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lang=de&limit=1${bias}`).then(r=>r.json());
       found=result.features?.[0]?photonItem(result.features[0]):null;
@@ -1011,7 +1046,11 @@ async function calculateRoute(alternative=false,silent=false) {
   const keepDriverMode=silent&&isDriverMode();
   if(!silent){state.loading=true; state.notice=alternative?'Alternative wird berechnet…':'Route wird berechnet…'; render();}
   let route=null;
-  if(silent){
+  const localPossible=offlineCovers(state.current)&&offlineCovers(state.destination)&&readOfflineStatus().routing;
+  if(localPossible&&navigator.onLine===false){
+    route=await calculateNrwOfflineRoute();
+    state.trafficStatus='NRW-Offline-Navigation aktiv';
+  } else if(silent){
     route=await calculateFastReroute(alternative);
     state.trafficStatus=route.provider==='tomtom'?`Live-Verkehr aktiv · ${formatTrafficDelay(route.trafficDelay)}`:'Schnelle Neuberechnung · OSRM-Notbetrieb';
   } else if(canUseTomTom()) {
@@ -1022,7 +1061,10 @@ async function calculateRoute(alternative=false,silent=false) {
       handleTomTomError(error);
     }
   }
-  if(!route)route=await calculateOsrmRoute(alternative);
+  if(!route){
+    try{route=await calculateOsrmRoute(alternative);}
+    catch(error){if(localPossible)route=await calculateNrwOfflineRoute();else throw error;}
+  }
   state.route=route;
   if(route.provider==='tomtom')state.lastTrafficCheck=Date.now();
   resetRouteProgress(keepDriverMode?'driving':'overview');
@@ -1030,6 +1072,8 @@ async function calculateRoute(alternative=false,silent=false) {
 }
 
 async function calculateFastReroute(alternative=false){
+  const localPossible=offlineCovers(state.current)&&offlineCovers(state.destination)&&readOfflineStatus().routing;
+  if(navigator.onLine===false&&localPossible)return calculateNrwOfflineRoute();
   const tomtom=canUseTomTom()?calculateTomTomRoute(alternative).catch(error=>{handleTomTomError(error);return null;}):Promise.resolve(null);
   const osrm=calculateOsrmRoute(alternative).catch(()=>null);
   // TomTom erhält kurz Vorrang für Live-Verkehr. Antwortet es unterwegs nicht
@@ -1040,7 +1084,50 @@ async function calculateFastReroute(alternative=false){
   if(quickOsrm)return quickOsrm;
   const lateTomTom=await tomtom;
   if(lateTomTom)return lateTomTom;
+  if(localPossible)return calculateNrwOfflineRoute();
   throw new Error('reroute-failed');
+}
+
+const offlineRouteRequests=new Map();
+window.onNrwOfflineRoute=(requestId,json,error)=>{
+  const pending=offlineRouteRequests.get(requestId);if(!pending)return;
+  offlineRouteRequests.delete(requestId);
+  if(error||!json)pending.reject(new Error(error||'Offline-Routing fehlgeschlagen'));
+  else {try{pending.resolve(brouterRouteToClassic(JSON.parse(json)));}catch(parseError){pending.reject(parseError);}}
+};
+
+function calculateNrwOfflineRoute(){
+  return new Promise((resolve,reject)=>{
+    const requestId=`nrw-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const timeout=setTimeout(()=>{offlineRouteRequests.delete(requestId);reject(new Error('Offline-Routing Zeitüberschreitung'));},50000);
+    offlineRouteRequests.set(requestId,{resolve:value=>{clearTimeout(timeout);resolve(value);},reject:error=>{clearTimeout(timeout);reject(error);}});
+    try{window.AndroidNavi.calculateOfflineRoute(requestId,state.current.lat,state.current.lon,state.destination.lat,state.destination.lon,state.current.heading||0);}
+    catch(error){clearTimeout(timeout);offlineRouteRequests.delete(requestId);reject(error);}
+  });
+}
+
+function brouterManeuver(command=1,exit=0){
+  if(command===13||command===14)return {type:'roundabout',modifier:command===14?'left':'right',exit};
+  const modifiers={2:'left',3:'slight left',4:'sharp left',5:'right',6:'slight right',7:'sharp right',8:'slight left',9:'slight right',10:'uturn',11:'uturn',15:'uturn'};
+  return {type:command===1?'continue':command===8||command===9?'fork':'turn',modifier:modifiers[command]||'straight'};
+}
+
+function brouterRouteToClassic(data){
+  const feature=data.features?.[0],coordinates=feature?.geometry?.coordinates||[],properties=feature?.properties||{};
+  if(coordinates.length<2)throw new Error('Offline-Route enthält keine Strecke');
+  const hints=(properties.voicehints||[]).filter(h=>Number.isFinite(+h[0])).sort((a,b)=>a[0]-b[0]);
+  const boundaries=[0,...hints.map(h=>Math.max(1,Math.min(coordinates.length-1,+h[0]))),coordinates.length-1].filter((value,index,all)=>index===0||value>all[index-1]);
+  const totalDistance=+properties['track-length']||0,totalDuration=+properties['total-time']||Math.max(1,totalDistance/16);
+  const steps=[];
+  for(let index=0;index<boundaries.length-1;index++){
+    const from=boundaries[index],to=boundaries[index+1],slice=coordinates.slice(from,to+1),hint=index===0?null:hints[index-1];
+    let distance=0;for(let point=1;point<slice.length;point++)distance+=haversine(slice[point-1][1],slice[point-1][0],slice[point][1],slice[point][0]);
+    const maneuver=index===0?{type:'depart',modifier:'straight'}:brouterManeuver(+hint?.[1],+hint?.[2]);
+    maneuver.location=slice[0];
+    steps.push({distance,duration:totalDuration*(distance/Math.max(1,totalDistance)),name:'',ref:'',maneuver,geometry:{type:'LineString',coordinates:slice}});
+  }
+  steps.push({distance:0,duration:0,name:'Ziel',maneuver:{type:'arrive',modifier:'straight',location:coordinates.at(-1)},geometry:{type:'LineString',coordinates:coordinates.slice(-2)}});
+  return {provider:'offline',trafficDelay:0,fetchedAt:Date.now(),distance:totalDistance,duration:totalDuration,geometry:{type:'LineString',coordinates},legs:[{distance:totalDistance,duration:totalDuration,steps}]};
 }
 
 async function calculateOsrmRoute(alternative=false) {
@@ -1288,6 +1375,23 @@ function initLeafletDriveMap(driver=isDriverMode()) {
 }
 
 const DRIVER_STYLE='https://tiles.openfreemap.org/styles/liberty';
+function offlineDriverStyle(){
+  const source='nrw';
+  const roadWidth=['interpolate',['linear'],['zoom'],8,['match',['get','kind'],'motorway',2.4,'trunk',2,'primary',1.7,'secondary',1.4,1],14,['match',['get','kind'],'motorway',15,'trunk',13,'primary',11,'secondary',9,'tertiary',8,'residential',7,'living_street',7,'unclassified',7,'service',5,3],18,['match',['get','kind'],'motorway',30,'trunk',27,'primary',24,'secondary',21,'tertiary',19,'residential',17,'living_street',17,'unclassified',17,'service',12,7]];
+  return {version:8,glyphs:'https://app.local/offline/fonts/{fontstack}/{range}.pbf',sources:{[source]:{type:'vector',tiles:['https://app.local/offline-tiles/{z}/{x}/{y}.pbf'],minzoom:0,maxzoom:14,attribution:'© OpenStreetMap-Mitwirkende'}},layers:[
+    {id:'background',type:'background',paint:{'background-color':'#eef0e9'}},
+    {id:'land',type:'fill',source,'source-layer':'land',paint:{'fill-color':['match',['get','kind'],'forest','#dce9d2','grass','#e4efd9','meadow','#e6efd9','#e9ece4']}},
+    {id:'water',type:'fill',source,'source-layer':'water_polygons',paint:{'fill-color':'#b8dce8'}},
+    {id:'water-lines',type:'line',source,'source-layer':'water_lines',paint:{'line-color':'#9bcfdf','line-width':['interpolate',['linear'],['zoom'],10,1,16,5]}},
+    {id:'sites',type:'fill',source,'source-layer':'sites',paint:{'fill-color':'#e3e5df','fill-opacity':.8}},
+    {id:'buildings',type:'fill',source,'source-layer':'buildings',minzoom:15,paint:{'fill-color':'#d7d8d4','fill-outline-color':'#c5c6c2'}},
+    {id:'road-casing',type:'line',source,'source-layer':'streets',filter:['!', ['==',['get','rail'],true]],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#9faab8','line-width':['+',roadWidth,4]}},
+    {id:'road-fill',type:'line',source,'source-layer':'streets',filter:['!', ['==',['get','rail'],true]],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':['match',['get','kind'],'motorway','#f4d79a','trunk','#f4dfad','primary','#f6e4bd','#fbfcf7'],'line-width':roadWidth}},
+    {id:'road-labels',type:'symbol',source,'source-layer':'street_labels',minzoom:12,layout:{'symbol-placement':'line','symbol-spacing':550,'text-field':['coalesce',['get','name_de'],['get','name'],['get','ref']],'text-font':['Noto Sans Bold'],'text-size':['interpolate',['linear'],['zoom'],12,12,14,17,17,25],'text-keep-upright':true,'text-max-angle':25},paint:{'text-color':'#172027','text-halo-color':'#fbfcf5','text-halo-width':2.3}},
+    {id:'places',type:'symbol',source,'source-layer':'place_labels',layout:{'text-field':['coalesce',['get','name_de'],['get','name']],'text-font':['Noto Sans Bold'],'text-size':['interpolate',['linear'],['zoom'],7,12,12,18,15,22]},paint:{'text-color':'#3f4a4d','text-halo-color':'#eef0e9','text-halo-width':2}}
+  ]};
+}
+function driverMapStyle(){return readOfflineStatus().map&&offlineCovers(state.current)?offlineDriverStyle():DRIVER_STYLE;}
 const DRIVER_PITCH=55;
 const DRIVER_ANCHOR_Y=.74;
 const DRIVER_BASE_ZOOM=17.35;
@@ -1485,7 +1589,7 @@ function initDriverMapLibre(){
   const guide=driverVehicleHeading(state.current,state.current.heading);
   state.driverCourse=normalizedCourse(guide);
   try{
-    const map=new maplibregl.Map({container:element,style:DRIVER_STYLE,center:[state.current.lon,state.current.lat],zoom:driverZoom(),bearing:state.driverCourse,pitch:DRIVER_PITCH,interactive:false,attributionControl:false,antialias:false,fadeDuration:140,maxTileCacheZoomLevels:1,refreshExpiredTiles:false});
+    const map=new maplibregl.Map({container:element,style:driverMapStyle(),center:[state.current.lon,state.current.lat],zoom:driverZoom(),bearing:state.driverCourse,pitch:DRIVER_PITCH,interactive:false,attributionControl:false,antialias:false,fadeDuration:140,maxTileCacheZoomLevels:1,refreshExpiredTiles:false});
     state.driverMap=map;
     let loaded=false;
     const timeout=setTimeout(()=>{if(!loaded&&state.driverMap===map)fallBackToLeafletDriver();},12000);
@@ -1508,12 +1612,30 @@ function initDriverMapLibre(){
 }
 
 function initSummaryMap() {
+  if(readOfflineStatus().map&&offlineCovers(state.current)&&globalThis.maplibregl?.Map){
+    const coords=routeCoordinates();
+    state.summaryMap=new maplibregl.Map({container:'summary-map',style:offlineDriverStyle(),center:coords[0]||[state.current.lon,state.current.lat],zoom:13,pitch:0,bearing:0,interactive:false,attributionControl:true,antialias:false});
+    state.summaryMap.once('load',()=>{
+      if(!coords.length)return;
+      state.summaryMap.addSource('summary-route',{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:coords}}});
+      state.summaryMap.addLayer({id:'summary-route-outline',type:'line',source:'summary-route',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#f4f8f8','line-width':14}});
+      state.summaryMap.addLayer({id:'summary-route-line',type:'line',source:'summary-route',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#008fd0','line-width':9}});
+      const bounds=coords.reduce((box,coordinate)=>box.extend(coordinate),new maplibregl.LngLatBounds(coords[0],coords[0]));
+      state.summaryMap.fitBounds(bounds,{padding:18,duration:0});
+    });
+    return;
+  }
   state.summaryMap=initBaseMap('summary-map',false); drawRoute(state.summaryMap);
   if(state.route) state.summaryMap.fitBounds(L.latLngBounds(routeCoordinates().map(([lon,lat])=>[lat,lon])),{padding:[15,15]});
 }
 
 function initPreviewMap() {
   if (!state.destination) return;
+  if(readOfflineStatus().map&&offlineCovers(state.destination)&&globalThis.maplibregl?.Map){
+    state.previewMap=new maplibregl.Map({container:'preview-map',style:offlineDriverStyle(),center:[state.destination.lon,state.destination.lat],zoom:16,pitch:0,bearing:0,interactive:false,attributionControl:true,antialias:false});
+    state.previewMap.once('load',()=>new maplibregl.Marker().setLngLat([state.destination.lon,state.destination.lat]).addTo(state.previewMap));
+    return;
+  }
   state.previewMap=initBaseMap('preview-map',false);
   state.previewMap.setView([state.destination.lat,state.destination.lon],16);
   L.marker([state.destination.lat,state.destination.lon]).addTo(state.previewMap);
