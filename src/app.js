@@ -460,7 +460,7 @@ function renderAbout() {
     <span>Anw. 9.510.1234792.2 OS 842337<br>(2039, 4.4.2013)</span>
     <span>64 MB RAM (frei: 15.1 MB)<br>GPS v1.20, Boot 5.5277</span>
     <span>Karte: Western_and_Central_Europe_2GB<br>v835.2419 · Sprache: Deutsch</span>
-    <b>Classic Navi 2.8.4 A20e<br>TomTom Traffic · sicherer Hotfix-Updater</b>
+    <b>Classic Navi 2.12.0 A20e<br>TomTom Traffic · sicherer Hotfix-Updater</b>
   </div></div><div class="bottom-bar about-buttons"><button class="bottom-button" data-action="drive">Fertig</button><button class="bottom-button" data-action="copyright">Copyright</button></div>`;
 }
 
@@ -560,7 +560,7 @@ async function act(action) {
       readOfflineStatus();
       if(state.offline.ready)notify('NRW ist vollständig offline installiert. Karte, Adressen und Neuberechnung funktionieren ohne Internet.');
       else if(state.offline.downloading)notify(`NRW-Offlinedaten werden geladen: ${state.offline.file||''} ${state.offline.percent||0} %. Bitte WLAN eingeschaltet lassen.`);
-      else {window.AndroidNavi?.downloadNrwOffline?.();state.offline.downloading=true;render();notify('Der einmalige NRW-Download ist etwa 1,23 GB groß und startet nur im WLAN. Bitte WLAN eingeschaltet lassen.');}
+      else {window.AndroidNavi?.downloadNrwOffline?.();state.offline.downloading=true;render();notify('Der einmalige NRW-Download ist etwa 270 MB groß und startet nur im WLAN. Bitte WLAN eingeschaltet lassen.');}
       break;
     case 'mapCorrections': notify('Kartenkorrekturen werden über OpenStreetMap aktuell gehalten.'); break;
     case 'factoryReset': if(confirm('Alle Heimat-, Favoriten- und Verlaufsdaten löschen?')){localStorage.clear();location.reload();} break;
@@ -1384,11 +1384,8 @@ function offlineDriverStyle(){
   const roadWidth=['interpolate',['linear'],['zoom'],8,['match',['get','kind'],'motorway',2.4,'trunk',2,'primary',1.7,'secondary',1.4,1],14,['match',['get','kind'],'motorway',15,'trunk',13,'primary',11,'secondary',9,'tertiary',8,'residential',7,'living_street',7,'unclassified',7,'service',5,3],18,['match',['get','kind'],'motorway',30,'trunk',27,'primary',24,'secondary',21,'tertiary',19,'residential',17,'living_street',17,'unclassified',17,'service',12,7]];
   return {version:8,glyphs:'https://app.local/offline/fonts/{fontstack}/{range}.pbf',sources:{[source]:{type:'vector',tiles:['https://app.local/offline-tiles/{z}/{x}/{y}.pbf'],minzoom:0,maxzoom:14,attribution:'© OpenStreetMap-Mitwirkende'}},layers:[
     {id:'background',type:'background',paint:{'background-color':'#eef0e9'}},
-    {id:'land',type:'fill',source,'source-layer':'land',paint:{'fill-color':['match',['get','kind'],'forest','#dce9d2','grass','#e4efd9','meadow','#e6efd9','#e9ece4']}},
     {id:'water',type:'fill',source,'source-layer':'water_polygons',paint:{'fill-color':'#b8dce8'}},
     {id:'water-lines',type:'line',source,'source-layer':'water_lines',paint:{'line-color':'#9bcfdf','line-width':['interpolate',['linear'],['zoom'],10,1,16,5]}},
-    {id:'sites',type:'fill',source,'source-layer':'sites',paint:{'fill-color':'#e3e5df','fill-opacity':.8}},
-    {id:'buildings',type:'fill',source,'source-layer':'buildings',minzoom:15,paint:{'fill-color':'#d7d8d4','fill-outline-color':'#c5c6c2'}},
     {id:'road-casing',type:'line',source,'source-layer':'streets',filter:['!', ['==',['get','rail'],true]],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#9faab8','line-width':['+',roadWidth,4]}},
     {id:'road-fill',type:'line',source,'source-layer':'streets',filter:['!', ['==',['get','rail'],true]],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':['match',['get','kind'],'motorway','#f4d79a','trunk','#f4dfad','primary','#f6e4bd','#fbfcf7'],'line-width':roadWidth}},
     {id:'road-labels',type:'symbol',source,'source-layer':'street_labels',minzoom:12,layout:{'symbol-placement':'line','symbol-spacing':550,'text-field':['coalesce',['get','name_de'],['get','name'],['get','ref']],'text-font':['Noto Sans Bold'],'text-size':['interpolate',['linear'],['zoom'],12,12,14,17,17,25],'text-keep-upright':true,'text-max-angle':25},paint:{'text-color':'#172027','text-halo-color':'#fbfcf5','text-halo-width':2.3}},
