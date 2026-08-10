@@ -1074,17 +1074,21 @@ async function calculateRoute(alternative=false,silent=false) {
 async function calculateFastReroute(alternative=false){
   const localPossible=offlineCovers(state.current)&&offlineCovers(state.destination)&&readOfflineStatus().routing;
   if(navigator.onLine===false&&localPossible)return calculateNrwOfflineRoute();
+  const offline=localPossible?calculateNrwOfflineRoute().catch(()=>null):Promise.resolve(null);
   const tomtom=canUseTomTom()?calculateTomTomRoute(alternative).catch(error=>{handleTomTomError(error);return null;}):Promise.resolve(null);
   const osrm=calculateOsrmRoute(alternative).catch(()=>null);
   // TomTom erhält kurz Vorrang für Live-Verkehr. Antwortet es unterwegs nicht
   // schnell, wird die bereits parallel laufende kostenlose Route verwendet.
   const quickTomTom=await Promise.race([tomtom,new Promise(resolve=>setTimeout(()=>resolve(null),1600))]);
   if(quickTomTom)return quickTomTom;
+  const quickOffline=await Promise.race([offline,new Promise(resolve=>setTimeout(()=>resolve(null),1200))]);
+  if(quickOffline)return quickOffline;
   const quickOsrm=await osrm;
   if(quickOsrm)return quickOsrm;
   const lateTomTom=await tomtom;
   if(lateTomTom)return lateTomTom;
-  if(localPossible)return calculateNrwOfflineRoute();
+  const lateOffline=await offline;
+  if(lateOffline)return lateOffline;
   throw new Error('reroute-failed');
 }
 

@@ -10,8 +10,8 @@
                   },
                   {
                       "path":  "src/app.js",
-                      "sha256":  "859bddef3279ce8b47da4782b1d26793f975009cf889c250fcf8ec795935d990",
-                      "bytes":  145978,
+                      "sha256":  "4f688363ae0283e775e92653044980a7e2e3e8abb215720657b7fe68686dbcdb",
+                      "bytes":  146240,
                       "url":  "src/app.js"
                   },
                   {
@@ -51,5 +51,5 @@
                       "url":  "classic-navi.svg"
                   }
               ],
-    "signature":  "O6GJmQXUZP4lXWHl9/zfUDN+acT+j64i42vAO9/n5wk="
+    "signature":  "aCd/Olcn0SY9exmYnlFqSch6nWF0SFEaJuECXpCh4S4="
 }
