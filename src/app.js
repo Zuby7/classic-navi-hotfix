@@ -56,7 +56,9 @@ const state = {
   instructionStepIndex: 0,
   hasMoved: false,
   lastFix: null,
+  gpsJumpCandidate: null,
   motionFixes: 0,
+  motionCandidateHeading: null,
   demoMode: false,
   junctionStepKey: -1,
   junctionShownAt: 0,
@@ -71,6 +73,8 @@ const state = {
   lastSpoken: '',
   rerouting: false,
   lastReroute: 0,
+  lastReroutePosition: null,
+  offRouteFirstAt: 0,
   trafficEnabled: true,
   tomtomKey: TOMTOM_API_KEY,
   trafficBlockedUntil: Number(localStorage.getItem('classic-traffic-blocked-until') || 0),
@@ -105,6 +109,8 @@ window.onNrwOfflineProgress=(json)=>{
   try{state.offline={...state.offline,...JSON.parse(json||'{}')};}catch{}
   if(state.screen==='settings3')render();
 };
+
+window.onNativeGps=coords=>acceptGpsPosition({coords:coords||{}});
 
 // Alte, vom Fahrer eingetragene Schlüssel und Sperrstände der Vorversion
 // einmalig entfernen; ab 2.6 übernimmt die Familien-APK die Einrichtung.
@@ -357,9 +363,10 @@ function renderWizard() {
 function renderNumberWizard() {
   const digits = ['1','2','3','4','5','6','7','8','9','0'];
   const isPostcode = state.wizardStep === 'postcode';
+  const numberKeys=isPostcode?digits:[...digits,'A','B'];
   const value = isPostcode ? state.address.postcode : state.address.number;
   return `<div class="panel-screen number-screen">${screenHeader(isPostcode ? 'Postleitzahl eingeben:' : 'Hausnummer eingeben:')}<div class="number-value"><strong>${escapeHtml(value) || '&nbsp;'}</strong></div>
-    <div class="number-keyboard">${digits.map(k=>`<button class="number-key" data-key="${k}">${k}</button>`).join('')}</div>
+    <div class="number-keyboard ${isPostcode?'':'house-number-keyboard'}">${numberKeys.map(k=>`<button class="number-key" data-key="${k}">${k}</button>`).join('')}</div>
   </div><div class="bottom-bar wizard-nav"><button class="bottom-button" data-key="⌫">◀</button><button class="bottom-button" data-action="cancelWizard">Abbrechen</button><button class="bottom-button" data-action="wizardNext">OK</button></div>`;
 }
 
@@ -460,7 +467,7 @@ function renderAbout() {
     <span>Anw. 9.510.1234792.2 OS 842337<br>(2039, 4.4.2013)</span>
     <span>64 MB RAM (frei: 15.1 MB)<br>GPS v1.20, Boot 5.5277</span>
     <span>Karte: Western_and_Central_Europe_2GB<br>v835.2419 · Sprache: Deutsch</span>
-    <b>Classic Navi 2.12.0 A20e<br>TomTom Traffic · sicherer Hotfix-Updater</b>
+    <b>Classic Navi 2.13.0 A20e<br>TomTom Traffic · sicherer Hotfix-Updater</b>
   </div></div><div class="bottom-bar about-buttons"><button class="bottom-button" data-action="drive">Fertig</button><button class="bottom-button" data-action="copyright">Copyright</button></div>`;
 }
 
@@ -1052,7 +1059,8 @@ async function calculateRoute(alternative=false,silent=false) {
     state.trafficStatus='NRW-Offline-Navigation aktiv';
   } else if(silent){
     route=await calculateFastReroute(alternative);
-    state.trafficStatus=route.provider==='tomtom'?`Live-Verkehr aktiv · ${formatTrafficDelay(route.trafficDelay)}`:'Schnelle Neuberechnung · OSRM-Notbetrieb';
+    state.trafficStatus=route.provider==='tomtom'?`Live-Verkehr aktiv · ${formatTrafficDelay(route.trafficDelay)}`
+      :route.provider==='offline'?'NRW-Offline-Navigation aktiv':'Schnelle Neuberechnung · OSRM-Notbetrieb';
   } else if(canUseTomTom()) {
     try {
       route=await calculateTomTomRoute(alternative);
@@ -1105,7 +1113,11 @@ function calculateNrwOfflineRoute(){
     const requestId=`nrw-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const timeout=setTimeout(()=>{offlineRouteRequests.delete(requestId);reject(new Error('Offline-Routing Zeitüberschreitung'));},50000);
     offlineRouteRequests.set(requestId,{resolve:value=>{clearTimeout(timeout);resolve(value);},reject:error=>{clearTimeout(timeout);reject(error);}});
-    try{window.AndroidNavi.calculateOfflineRoute(requestId,state.current.lat,state.current.lon,state.destination.lat,state.destination.lon,state.current.heading||0);}
+    // Eine alte Richtung im Stand darf den Router nicht auf die falsche
+    // Fahrbahn zwingen. -1 bedeutet: Startstraße frei anhand des Netzes wählen.
+    const reliableHeading=state.current.speed>=1.5&&(state.current.accuracy||100)<=50&&Number.isFinite(state.current.heading)
+      ?normalizedCourse(state.current.heading):-1;
+    try{window.AndroidNavi.calculateOfflineRoute(requestId,state.current.lat,state.current.lon,state.destination.lat,state.destination.lon,reliableHeading);}
     catch(error){clearTimeout(timeout);offlineRouteRequests.delete(requestId);reject(error);}
   });
 }
@@ -1152,7 +1164,13 @@ async function calculateOsrmRoute(alternative=false) {
     // aber weiterhin keine sofortige Kehrtwende am Start zulassen.
     params.set('bearings',`${Math.round(normalizedCourse(state.current.heading))},110;`);
     params.delete('radiuses');
-    data=await fetchJsonWithTimeout(`${base}?${params}`,7000);
+    try{data=await fetchJsonWithTimeout(`${base}?${params}`,7000);}
+    catch(secondError){
+      // In einer echten Sackgasse ist die einzig legale Lösung eine Wende.
+      // Erst nach zwei richtungsgebundenen Versuchen darf OSRM sie zulassen.
+      params.delete('bearings');params.delete('radiuses');params.set('continue_straight','false');
+      data=await fetchJsonWithTimeout(`${base}?${params}`,7000);
+    }
   }
   if(data.code!=='Ok'||!data.routes?.length) throw new Error();
   const route=alternative&&data.routes[1]?data.routes[1]:data.routes[0];
@@ -1168,10 +1186,17 @@ async function calculateTomTomRoute(alternative=false) {
   const params=new URLSearchParams({key:state.tomtomKey,traffic:'true',travelMode:'car',routeType:'fastest',routeRepresentation:'polyline',instructionsType:'text',language:'de-DE',computeTravelTimeFor:'all',maxAlternatives:alternative?'1':'0'});
   if(Math.max(0,Number(state.current.speed)||0)>=1.2&&Number.isFinite(state.current.heading))params.set('vehicleHeading',String(Math.round(normalizedCourse(state.current.heading))));
   params.append('sectionType','traffic');params.append('sectionType','lanes');
-  const response=await fetchWithTimeout(`https://api.tomtom.com/routing/1/calculateRoute/${points}/json?${params}`,{},6500);
+  let response=await fetchWithTimeout(`https://api.tomtom.com/routing/1/calculateRoute/${points}/json?${params}`,{},6500);
+  let data=response.ok?await response.json():null;
+  // Fahrzeugrichtung ist eine starke Hilfe auf Parallelstraßen, darf aber in
+  // einer Sackgasse keine sonst gültige Route verhindern.
+  if(params.has('vehicleHeading')&&((!response.ok&&[400,404].includes(response.status))||!data?.routes?.length)){
+    params.delete('vehicleHeading');
+    response=await fetchWithTimeout(`https://api.tomtom.com/routing/1/calculateRoute/${points}/json?${params}`,{},6500);
+    data=response.ok?await response.json():null;
+  }
   if(!response.ok){const error=new Error(`tomtom-${response.status}`);error.status=response.status;throw error;}
-  const data=await response.json();
-  if(!data.routes?.length)throw new Error('tomtom-empty');
+  if(!data?.routes?.length)throw new Error('tomtom-empty');
   return tomTomRouteToClassic(alternative&&data.routes[1]?data.routes[1]:data.routes[0]);
 }
 
@@ -1303,7 +1328,7 @@ function handleTomTomError(error){
 
 function resetRouteProgress(navigationMode='overview'){
   if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;}
-  state.lastInstructionIndex=-1; state.announcedLevels=[]; state.compoundCurrentStep=-1;state.compoundNextStep=-1;state.compoundAnnouncedAt=0; state.routeStepIndex=0; state.routeProgressReady=false; state.instructionStepIndex=0; state.junctionStepKey=-1; state.junctionShownAt=0; state.offRouteFixes=0;state.wrongWayFixes=0; state.navigationMode=navigationMode;state.arrived=false;state.loading=false; state.notice=''; save();
+  state.lastInstructionIndex=-1; state.announcedLevels=[]; state.compoundCurrentStep=-1;state.compoundNextStep=-1;state.compoundAnnouncedAt=0; state.routeStepIndex=0; state.routeProgressReady=false; state.instructionStepIndex=0; state.junctionStepKey=-1; state.junctionShownAt=0; state.offRouteFixes=0;state.wrongWayFixes=0;state.offRouteFirstAt=0;if(navigationMode!=='driving'){state.lastReroute=0;state.lastReroutePosition=null;} state.navigationMode=navigationMode;state.arrived=false;state.loading=false; state.notice=''; save();
 }
 
 function clearRoute(targetScreen='drive',announce=true) { state.trafficRouteToken++;state.route=null; state.destination=null;state.navigationMode='overview';state.arrived=false; state.trafficIncidents=[];state.announcedIncidentIds=[];state.lastInstructionIndex=-1; state.announcedLevels=[];state.compoundCurrentStep=-1;state.compoundNextStep=-1;state.compoundAnnouncedAt=0; state.routeStepIndex=0; state.routeProgressReady=false; state.junctionStepKey=-1; state.offRouteFixes=0;state.wrongWayFixes=0; if(state.junctionTimer){clearTimeout(state.junctionTimer);state.junctionTimer=0;} if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false); if(announce)speak('Route gelöscht.'); go(targetScreen); }
@@ -1902,12 +1927,16 @@ function positionDriverMarker(){
 }
 
 function routeGuidanceHeading(position=state.current,fallback=0){
-  const coords=routeCoordinates();
+  const coords=driverRouteSegments();
   if(!hasPosition(position)||coords.length<2)return Number.isFinite(fallback)?fallback:0;
   let segment=0,best=Infinity;
+  const moving=Math.max(0,Number(state.current.speed)||0)>=1.2&&Number.isFinite(state.current.heading);
   for(let index=1;index<coords.length;index++){
     const distance=pointSegmentDistance(position.lat,position.lon,coords[index-1][1],coords[index-1][0],coords[index][1],coords[index][0]);
-    if(distance<best){best=distance;segment=index-1;}
+    const candidateBearing=bearingBetween(coords[index-1][1],coords[index-1][0],coords[index][1],coords[index][0]);
+    const angle=moving?Math.abs(((candidateBearing-normalizedCourse(state.current.heading)+540)%360)-180):0;
+    const score=distance+(moving?Math.min(70,angle)*.65:0);
+    if(score<best){best=score;segment=index-1;}
   }
   const from=coords[segment],to=coords[Math.min(coords.length-1,segment+1)];
   return from&&to?bearingBetween(from[1],from[0],to[1],to[0]):fallback;
@@ -1949,24 +1978,49 @@ function applyDriveOrientation(heading,immediate=false){
 function acceptGpsPosition(pos){
   const now=Date.now();
   const accuracy=Number.isFinite(pos?.coords?.accuracy)?pos.coords.accuracy:100;
-  if(!Number.isFinite(pos?.coords?.latitude)||!Number.isFinite(pos?.coords?.longitude)||accuracy>300)return false;
+  if(!Number.isFinite(pos?.coords?.latitude)||!Number.isFinite(pos?.coords?.longitude)||accuracy>120)return false;
+  let forcedRelocation=false;
   let derivedSpeed=0,moved=0,derivedHeading=state.current.heading||0;
   if(state.lastFix){
     moved=haversine(state.lastFix.lat,state.lastFix.lon,pos.coords.latitude,pos.coords.longitude);
     const seconds=Math.max(1,(now-state.lastFix.time)/1000);
     derivedSpeed=moved/seconds;
     if(moved>3)derivedHeading=bearingBetween(state.lastFix.lat,state.lastFix.lon,pos.coords.latitude,pos.coords.longitude);
-    if(seconds<5&&moved>Math.max(500,accuracy*8))return false;
+    const reportedSpeed=Number.isFinite(pos.coords.speed)?Math.max(0,pos.coords.speed):0;
+    const plausibleJump=Math.max(80,accuracy*3,reportedSpeed*seconds+60);
+    if(seconds<10&&moved>plausibleJump){
+      // Ein einzelner kilometerweiter GPS-Ausreißer darf den Pfeil nicht
+      // versetzen. Liefert Android denselben neuen Ort aber mehrfach stabil,
+      // stammt der alte Fix typischerweise aus dem Cache (Neustart/Reise).
+      const candidate=state.gpsJumpCandidate;
+      const clustered=candidate&&haversine(candidate.lat,candidate.lon,pos.coords.latitude,pos.coords.longitude)<Math.max(80,accuracy*2);
+      state.gpsJumpCandidate=clustered
+        ?{lat:pos.coords.latitude,lon:pos.coords.longitude,count:candidate.count+1,time:now}
+        :{lat:pos.coords.latitude,lon:pos.coords.longitude,count:1,time:now};
+      if(state.gpsJumpCandidate.count<3)return false;
+      forcedRelocation=true;
+      state.gpsJumpCandidate=null;
+    }else state.gpsJumpCandidate=null;
+    // WebView- und Android-Ortung dürfen parallel laufen. Nahezu identische
+    // Doppelmeldungen sollen aber keinen Bewegungszähler zurücksetzen.
+    if(now-state.lastFix.time<500&&moved<Math.max(5,accuracy))return false;
   }
-  const previous=hasPosition()?state.current:null;
+  const previous=!forcedRelocation&&hasPosition()?state.current:null;
+  const displacement=previous?haversine(previous.lat,previous.lon,pos.coords.latitude,pos.coords.longitude):0;
+  // Einen kurzzeitig sehr ungenauen Fix weder auf die Karte übernehmen noch
+  // als Abweichung werten. Der letzte gute Fix bleibt weiterhin sichtbar.
+  if(previous&&accuracy>Math.max(55,(previous.accuracy||10)*2.8)&&displacement<accuracy*1.5)return false;
   state.lastFix={lat:pos.coords.latitude,lon:pos.coords.longitude,time:now};
   const hasReportedSpeed=Number.isFinite(pos.coords.speed);
   const gpsSpeed=hasReportedSpeed?Math.max(0,pos.coords.speed):derivedSpeed;
-  const displacement=previous?haversine(previous.lat,previous.lon,pos.coords.latitude,pos.coords.longitude):0;
   const movementThreshold=Math.max(5,Math.min(18,accuracy*.8));
-  const movementEvidence=hasReportedSpeed
-    ?gpsSpeed>=1.1&&displacement>=2
-    :derivedSpeed>=2&&displacement>=movementThreshold;
+  let movementEvidence=hasReportedSpeed?gpsSpeed>=.55&&displacement>=1.2:derivedSpeed>=2&&displacement>=movementThreshold;
+  if(movementEvidence&&!hasReportedSpeed){
+    const candidate=normalizedCourse(derivedHeading),previousCandidate=state.motionCandidateHeading;
+    const consistent=!Number.isFinite(previousCandidate)||Math.abs(((candidate-previousCandidate+540)%360)-180)<55;
+    state.motionCandidateHeading=candidate;
+    if(!consistent){state.motionFixes=0;movementEvidence=false;}
+  }else if(!movementEvidence)state.motionCandidateHeading=null;
   state.motionFixes=movementEvidence?Math.min(4,state.motionFixes+1):0;
   const moving=!previous||state.motionFixes>=(hasReportedSpeed?2:3);
   const alpha=!previous?1:(gpsSpeed>3?.78:accuracy<25?.55:.35);
@@ -2059,7 +2113,9 @@ async function maybeReroute(){
     if(isDriverMode()&&!state.arrived){state.arrived=true;state.navigationMode='overview';if(window.AndroidNavi?.keepScreenOn)window.AndroidNavi.keepScreenOn(false);setTimeout(()=>go('summary'),0);}
     return;
   }
-  if(!state.hasMoved||state.rerouting||Date.now()-state.lastReroute<5000)return;
+  const now=Date.now();
+  if(!state.hasMoved||state.rerouting||state.current.speed<.8||now-state.lastReroute<12000)return;
+  if(state.lastReroutePosition&&now-state.lastReroute<30000&&haversine(state.current.lat,state.current.lon,state.lastReroutePosition.lat,state.lastReroutePosition.lon)<25)return;
   let nearest=Infinity,headingDifference=180;
   const steps=state.route.legs?.[0]?.steps||[];
   const from=Math.max(0,state.routeStepIndex-2),to=Math.min(steps.length-1,state.routeStepIndex+12);
@@ -2079,22 +2135,29 @@ async function maybeReroute(){
       if(candidate.distance<nearest){nearest=candidate.distance;headingDifference=Math.abs(((candidate.bearing-normalizedCourse(state.current.heading)+540)%360)-180);}
     }
   }
-  const tolerance=Math.max(18,Math.min(48,(state.current.accuracy||10)*1.5));
+  const tolerance=Math.max(14,Math.min(40,(state.current.accuracy||10)*1.35));
   const wrongWay=state.current.speed>=2.2&&nearest<tolerance*1.35&&headingDifference>115;
-  if(nearest<tolerance&&!wrongWay){state.offRouteFixes=0;state.wrongWayFixes=0;return;}
+  if(nearest<tolerance&&!wrongWay){state.offRouteFixes=0;state.wrongWayFixes=0;state.offRouteFirstAt=0;return;}
+  if(!state.offRouteFirstAt||now-state.offRouteFirstAt>7000){state.offRouteFirstAt=now;state.offRouteFixes=0;state.wrongWayFixes=0;}
   state.wrongWayFixes=wrongWay?state.wrongWayFixes+1:0;
   state.offRouteFixes++;
-  const requiredFixes=wrongWay||nearest>tolerance*1.8?2:3;
+  const requiredFixes=wrongWay||nearest>tolerance*2.2?2:4;
   if(state.offRouteFixes<requiredFixes)return;
-  state.offRouteFixes=0;state.wrongWayFixes=0;
+  state.offRouteFixes=0;state.wrongWayFixes=0;state.offRouteFirstAt=0;
   // Eine parallele Verkehrsprüfung darf die dringende Neuberechnung weder
   // blockieren noch später mit einem veralteten Ergebnis überschreiben.
   state.trafficRouteToken++;
-  state.rerouting=true; state.lastReroute=Date.now(); speak('Die Route wird neu berechnet.');
+  state.rerouting=true; state.lastReroute=Date.now();state.lastReroutePosition={lat:state.current.lat,lon:state.current.lon};speak('Die Route wird neu berechnet.');
   const rerouteMessage=document.querySelector('.xl-status-message span');
   if(rerouteMessage)rerouteMessage.textContent='Route wird neu berechnet…';
-  try{await calculateRoute(false,true);if(state.screen==='drive')render();}catch{}
-  finally{state.rerouting=false;}
+  try{await calculateRoute(false,true);}catch{}
+  finally{
+    state.rerouting=false;
+    // Erst nach dem Zurücksetzen rendern. Andernfalls blieb bei einer
+    // erfolgreichen Neuberechnung bis zum nächsten GPS-Fix fälschlich
+    // „Route wird neu berechnet…“ stehen.
+    if(state.screen==='drive')render();
+  }
 }
 
 function routeRoadSignature(route,startIndex=0){

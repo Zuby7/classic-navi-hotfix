@@ -138,6 +138,7 @@ button { touch-action: manipulation; cursor: pointer; }
 .number-value { height:58px; display:flex; align-items:center; justify-content:center; font-size:clamp(24px,7vh,45px); font-weight:800; }
 .number-value strong { min-width:72px; padding:0 7px; background:#111; color:white; text-align:center; line-height:1.05; }
 .number-keyboard { height:calc(100% - 90px); display:grid; grid-template-columns:repeat(5,1fr); grid-template-rows:repeat(2,1fr); }
+.number-keyboard.house-number-keyboard { grid-template-columns:repeat(6,1fr); }
 .number-key { border:1px solid #949d9e; border-radius:7px; background:linear-gradient(#f8fbfb,#d7e0e3 52%,#82afd3); color:#07101a; text-shadow:0 1px white; font-size:clamp(25px,7vh,48px); font-weight:800; }
 .number-key:active { background:#6ba4d3; }
 .address-type-grid::after { content:""; }
